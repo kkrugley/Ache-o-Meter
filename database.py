@@ -90,3 +90,17 @@ def get_all_active_users():
     except Exception as e:
         logging.error(f"Ошибка при получении пользователей из БД: {e}")
         return []
+
+def get_user_by_id(user_id: int):
+    """Возвращает данные пользователя по его ID."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        user = cursor.fetchone()
+        conn.close()
+        return user
+    except Exception as e:
+        logging.error(f"Ошибка при получении пользователя {user_id} из БД: {e}")
+        return None
