@@ -22,7 +22,8 @@ data/
 # Файлы конфигурации пользователя (личные)
 *.env
 *.local
-# GEMINI.md
+instructions.md
+*json
 
 # Python специфичные файлы
 __pycache__/

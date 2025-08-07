@@ -2,6 +2,7 @@ import logging
 import aiohttp
 from datetime import datetime, timedelta
 import asyncio
+import html
 
 # --- Сбор данных с API ---
 
@@ -142,10 +143,10 @@ def analyze_data_and_form_message(data: dict):
         return choice(positive_messages)
     
     if len(reasons) == 1:
-        return f"Oof! Кажется, сегодня стоит поберечь себя из-за **{reasons[0]}**. Держись, друг! 😔"
+        return f"Oof! Кажется, сегодня стоит поберечь себя из-за <b>{html.escape(reasons[0])}</b>. Держись, друг! 😔"
 
-    message = "Oof! Кажется, сегодня комбо. Держись, друг! 😔\n\nВот что может повлиять на самочувствие:\n"
+    message = "Oof! Кажется, сегодня комбо. Держись, друг! 😔<br><br>Вот что может повлиять на самочувствие:<br>"
     for reason in reasons:
-        message += f"• {reason.capitalize()}\n"
+        message += f"• {html.escape(reason.capitalize())}<br>"
         
     return message

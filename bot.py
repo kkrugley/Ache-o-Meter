@@ -27,7 +27,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
 
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 tf = TimezoneFinder()
 scheduler = AsyncIOScheduler(timezone="UTC")
@@ -106,19 +106,24 @@ async def get_coords_by_city(city_name: str):
 
 @dp.message(CommandStart())
 async def handle_start(message: types.Message):
-    await message.answer("Привет! Я бот 'Ache-o-Meter'. 🌦️\n\nЯ помогу тебе узнать, стоит ли сегодня ожидать головной боли из-за погоды.\n\nДля начала, напиши мне, пожалуйста, название твоего города.")
+    start_text = (
+        "Привет! Я бот 'Ache-o-Meter'. 🌦️\n\n"
+        "Я помогу тебе узнать, стоит ли сегодня ожидать головной боли из-за погоды.\n\n"
+        "Для начала, напиши мне, пожалуйста, название твоего города."
+    )
+    await message.answer(start_text)
 
 @dp.message(Command('help'))
 async def handle_help(message: types.Message):
     help_text = (
-        "Вот что я умею:\n"
-        "✅ Ежедневно присылаю прогноз для метеочувствительных людей, анализируя перепады давления, магнитные бури и уровень пыльцы.\n\n"
-        "*Основные команды:*\n"
-        "/start - начать работу с ботом.\n"
-        "/settings - изменить город или время уведомлений.\n"
-        "/forecast_now - получить прогноз немедленно.\n"
-        "/stop - приостановить рассылку.\n"
-        "/help - показать это сообщение.\n\n"
+        "<b>Вот что я умею:</b>\n"
+        "✅ Ежедневно присылаю прогноз для метеочувствительных людей.\n\n"
+        "<b>Основные команды:</b>\n"
+        "/start - Начать работу с ботом.\n"
+        "/settings - Изменить город или время уведомлений.\n"
+        "/forecast_now - Получить прогноз немедленно.\n"
+        "/stop - Приостановить рассылку.\n"
+        "/help - Показать это сообщение.\n\n"
         "Чтобы изменить город, можно также просто написать мне его название."
     )
     await message.answer(help_text)
@@ -128,7 +133,6 @@ async def handle_stop(message: types.Message):
     db.set_user_active(message.from_user.id, is_active=False)
     await message.answer("Я понял, больше не буду беспокоить. 😴\nЕсли передумаешь, просто напиши мне название города, и подписка возобновится.")
 
-# НОВАЯ КОМАНДА: /forecast_now
 @dp.message(Command('forecast_now'))
 async def handle_forecast_now(message: types.Message):
     user = db.get_user_by_id(message.from_user.id)
@@ -158,7 +162,7 @@ async def process_change_city_callback(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "change_time")
 async def process_change_time_callback(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("Понял. Отправь мне новое время для уведомлений в формате *ЧЧ:ММ* (например, 07:30 или 22:00).")
+    await callback.message.answer("Понял. Отправь мне новое время для уведомлений в формате <b>ЧЧ:ММ</b> (например, 07:30 или 22:00).")
     await state.set_state(UserState.waiting_for_time)
     await callback.answer()
 
@@ -167,12 +171,11 @@ async def process_new_time(message: types.Message, state: FSMContext):
     try:
         datetime.strptime(message.text, '%H:%M')
         db.update_user_notification_time(message.from_user.id, message.text)
-        await message.answer(f"Отлично! Новое время уведомлений установлено на *{message.text}*.")
+        await message.answer(f"Отлично! Новое время уведомлений установлено на <b>{message.text}</b>.")
         await state.clear()
     except ValueError:
-        await message.answer("Ой, формат неправильный. Пожалуйста, попробуй еще раз в формате *ЧЧ:ММ* (например, 09:00).")
+        await message.answer("Ой, формат неправильный. Пожалуйста, попробуй еще раз в формате <b>ЧЧ:ММ</b> (например, 09:00).")
 
-# НОВЫЙ ОБРАБОТЧИК: Подтверждение смены города
 @dp.callback_query(UserState.waiting_for_city_confirmation, F.data.startswith("confirm_city_"))
 async def process_city_confirmation(callback: types.CallbackQuery, state: FSMContext):
     action = callback.data.split('_')[2]
@@ -181,17 +184,17 @@ async def process_city_confirmation(callback: types.CallbackQuery, state: FSMCon
     if action == "yes":
         city_info = user_data['city_info']
         db.add_or_update_user(
-            user_id=callback.from_user.id, 
-            chat_id=callback.message.chat.id, 
-            city=city_info['name'], 
-            lat=city_info['lat'], 
-            lon=city_info['lon'], 
+            user_id=callback.from_user.id,
+            chat_id=callback.message.chat.id,
+            city=city_info['name'],
+            lat=city_info['lat'],
+            lon=city_info['lon'],
             timezone=city_info['tz']
         )
-        await callback.message.edit_text(f"Отлично! Я запомнил: **{city_info['name']}**. 😎\n\nТеперь ты в деле! Если хочешь изменить настройки, используй /settings.")
+        await callback.message.edit_text(f"Отлично! Я запомнил: <b>{city_info['name']}</b>. 😎\n\nТеперь ты в деле! Если хочешь изменить настройки, используй /settings.")
     else: # action == 'no'
         await callback.message.edit_text("Понял, ничего не меняю. Если передумаешь, просто напиши мне название города.")
-    
+
     await state.clear()
     await callback.answer()
 
@@ -200,22 +203,23 @@ async def process_city_confirmation(callback: types.CallbackQuery, state: FSMCon
 async def handle_text_message(message: types.Message, state: FSMContext):
     await message.answer("Ищу информацию по городу... ⏳")
     found_city_name, lat, lon, timezone = await get_coords_by_city(message.text)
-    
+
     if lat and lon and timezone:
         # Сохраняем найденные данные в состояние FSM
         await state.set_data({
             'city_info': {'name': found_city_name, 'lat': lat, 'lon': lon, 'tz': timezone}
         })
         await state.set_state(UserState.waiting_for_city_confirmation)
-        
+
         # Создаем клавиатуру для подтверждения
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✅ Да, это он", callback_data="confirm_city_yes")],
             [InlineKeyboardButton(text="❌ Нет, другой", callback_data="confirm_city_no")]
         ])
-        await message.answer(f"Я нашел вот это: **{found_city_name}**. Это правильный город?", reply_markup=keyboard)
+        await message.answer(f"Я нашел вот это: <b>{found_city_name}</b>. Это правильный город?", reply_markup=keyboard)
     else:
         await message.answer(f"Ой, я не могу найти место '{message.text}'. 😔\nПопробуй написать его по-другому или проверь, нет ли опечаток.")
+
 
 # --- Запуск и остановка ---
 
@@ -229,7 +233,6 @@ async def main():
     db.init_db()
     dp.shutdown.register(on_shutdown)
     
-    # Запускаем проверку раз в час
     scheduler.add_job(scheduled_check_and_send, 'cron', hour='*', minute=0)
     scheduler.start()
     
