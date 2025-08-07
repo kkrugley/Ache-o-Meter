@@ -31,7 +31,7 @@
 **Шаг 1: Клонирование репозитория**
 
 ```bash
-git clone https://github.com/ваш-репозиторий/Ache-o-Meter.git
+git clone https://github.com/kkrugley/Ache-o-Meter.git
 cd Ache-o-Meter
 ```
 
