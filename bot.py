@@ -140,11 +140,14 @@ async def handle_forecast_now(message: types.Message):
 
 @dp.message(Command('settings'))
 async def handle_settings(message: types.Message):
+    user = db.get_user_by_id(message.from_user.id)
+    city_info = f"Ваш текущий город: <b>{user['city']}</b>." if user and user['city'] else "Город не установлен."
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Изменить город", callback_data="change_city")],
         [InlineKeyboardButton(text="Изменить время", callback_data="change_time")]
     ])
-    await message.answer("Что вы хотите настроить?", reply_markup=keyboard)
+    await message.answer(f"{city_info}\nЧто вы хотите настроить?", reply_markup=keyboard)
 
 # --- Обработка колбэков и состояний ---
 
