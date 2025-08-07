@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    env_file:
+      - .env
+    restart: always
+    volumes:
+      # Эта строка сохранит файл users.db между перезапусками
+      - ./data:/app/data
