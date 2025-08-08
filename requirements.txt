@@ -1,6 +1,7 @@
-aiogram==3.7.0
-python-dotenv==1.0.1
-aiohttp==3.9.5
-APScheduler==3.10.4
-timezonefinder==6.2.0
-pytz==2024.1
+aiohttp
+python-dotenv
+aiogram
+apscheduler
+timezonefinder
+requests
+pytz

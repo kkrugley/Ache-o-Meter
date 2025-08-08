@@ -34,8 +34,6 @@ def add_or_update_user(user_id, chat_id, city, lat, lon, timezone):
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
         
-        # --- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-        # При обновлении (ON CONFLICT) мы НЕ трогаем поле notification_time.
         cursor.execute('''
             INSERT INTO users (user_id, chat_id, city, lat, lon, timezone, is_active)
             VALUES (?, ?, ?, ?, ?, ?, 1)

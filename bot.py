@@ -32,7 +32,6 @@ dp = Dispatcher()
 tf = TimezoneFinder()
 scheduler = AsyncIOScheduler(timezone="UTC")
 
-# ОБНОВЛЕНО: Добавлены новые состояния для подтверждения города
 class UserState(StatesGroup):
     waiting_for_time = State()
     waiting_for_city_confirmation = State()
@@ -123,10 +122,19 @@ async def handle_help(message: types.Message):
         "/settings - Изменить город или время уведомлений.\n"
         "/forecast_now - Получить прогноз немедленно.\n"
         "/stop - Приостановить рассылку.\n"
+        "/info - Узнать о факторах, влияющих на самочувствие.\n"
         "/help - Показать это сообщение.\n\n"
         "Чтобы изменить город, можно также просто написать мне его название."
     )
     await message.answer(help_text)
+
+@dp.message(Command('info'))
+async def handle_info(message: types.Message):
+    info_text = "<b>Я анализирую несколько ключевых факторов, которые могут влиять на ваше самочувствие:</b>\n\n"
+    for key, value in fcst.PARAMETER_DESCRIPTIONS.items():
+        info_text += f"{value}\n\n"
+    info_text += "На основе этих данных я составляю комплексный прогноз рисков."
+    await message.answer(info_text)
 
 @dp.message(Command('stop'))
 async def handle_stop(message: types.Message):
