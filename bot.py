@@ -13,6 +13,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.exceptions import TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 from timezonefinder import TimezoneFinder
@@ -195,17 +196,17 @@ async def process_sensitivity_menu(callback: types.CallbackQuery):
         toggle_value = "off" if is_on else "on"
         buttons.append([InlineKeyboardButton(
             text=f"{status} {label}",
-            callback_data=f"toggle_sens_{field}_{toggle_value}"
+            callback_data=f"toggle:sens:{field}:{toggle_value}"
         )])
     buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="settings_back")])
 
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
     await callback.answer()
 
-@dp.callback_query(F.data.startswith("toggle_sens_"))
+@dp.callback_query(F.data.startswith("toggle:sens:"))
 async def process_sensitivity_toggle(callback: types.CallbackQuery):
-    # toggle_sens_{field}_{on/off}
-    parts = callback.data.split("_")
+    # toggle:sens:{field}:{on/off}
+    parts = callback.data.split(":")
     field = parts[2]
     action = parts[3]
     value = action == "on"
@@ -222,11 +223,14 @@ async def process_sensitivity_toggle(callback: types.CallbackQuery):
         toggle_value = "off" if is_on else "on"
         buttons.append([InlineKeyboardButton(
             text=f"{status} {label}",
-            callback_data=f"toggle_sens_{f}_{toggle_value}"
+            callback_data=f"toggle:sens:{f}:{toggle_value}"
         )])
     buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="settings_back")])
 
-    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    try:
+        await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    except TelegramBadRequest:
+        pass  # Игнорируем ошибку "message is not modified"
     await callback.answer()
 
 # --- Подменю: Аллергены ---
@@ -246,16 +250,16 @@ async def process_allergens_menu(callback: types.CallbackQuery):
         toggle_value = "off" if is_on else "on"
         buttons.append([InlineKeyboardButton(
             text=f"{status} {label}",
-            callback_data=f"toggle_allergen_{field}_{toggle_value}"
+            callback_data=f"toggle:allergen:{field}:{toggle_value}"
         )])
     buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="settings_back")])
 
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
     await callback.answer()
 
-@dp.callback_query(F.data.startswith("toggle_allergen_"))
+@dp.callback_query(F.data.startswith("toggle:allergen:"))
 async def process_allergen_toggle(callback: types.CallbackQuery):
-    parts = callback.data.split("_")
+    parts = callback.data.split(":")
     field = parts[2]
     action = parts[3]
     value = action == "on"
@@ -271,11 +275,14 @@ async def process_allergen_toggle(callback: types.CallbackQuery):
         toggle_value = "off" if is_on else "on"
         buttons.append([InlineKeyboardButton(
             text=f"{status} {label}",
-            callback_data=f"toggle_allergen_{f}_{toggle_value}"
+            callback_data=f"toggle:allergen:{f}:{toggle_value}"
         )])
     buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="settings_back")])
 
-    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    try:
+        await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    except TelegramBadRequest:
+        pass  # Игнорируем ошибку "message is not modified"
     await callback.answer()
 
 # --- Кнопка «Назад» в главное меню настроек ---
