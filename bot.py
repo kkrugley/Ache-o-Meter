@@ -25,7 +25,6 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
@@ -74,31 +73,27 @@ async def scheduled_check_and_send():
 # --- API Геокодера ---
 
 async def get_coords_by_city(city_name: str):
-    """Получает координаты, полное название и часовой пояс по названию города."""
-    if not YANDEX_API_KEY:
-        logging.error("YANDEX_API_KEY не найден в .env")
-        return None, None, None, None
-    
+    """Получает координаты, полное название и часовой пояс по названию города через Nominatim (OpenStreetMap)."""
     encoded_city = quote(city_name)
-    url = f"https://geocode-maps.yandex.ru/1.x/?geocode={encoded_city}&apikey={YANDEX_API_KEY}&format=json&results=1"
-    
+    url = f"https://nominatim.openstreetmap.org/search?format=json&q={encoded_city}&limit=1"
+    headers = {"User-Agent": "Ache-o-Meter Telegram Bot"}
+
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
+            async with session.get(url, headers=headers) as response:
                 response.raise_for_status()
-                data = await response.json(content_type=None)
-                geo_objects = data.get('response', {}).get('GeoObjectCollection', {}).get('featureMember', [])
-                if geo_objects:
-                    geo_object = geo_objects[0]['GeoObject']
-                    lon_str, lat_str = geo_object['Point']['pos'].split()
-                    lat, lon = float(lat_str), float(lon_str)
-                    found_city_name = geo_object['metaDataProperty']['GeocoderMetaData']['text']
+                data = await response.json()
+                if data:
+                    geo_object = data[0]
+                    lat = float(geo_object['lat'])
+                    lon = float(geo_object['lon'])
+                    found_city_name = geo_object['display_name']
                     timezone_str = tf.timezone_at(lng=lon, lat=lat)
                     return found_city_name, lat, lon, timezone_str
     except aiohttp.ClientError as e:
-        logging.error(f"Ошибка при запросе к Яндекс.Геокодеру: {e}")
+        logging.error(f"Ошибка при запросе к Nominatim: {e}")
     except Exception as e:
-        logging.error(f"Ошибка при обработке ответа от Яндекс.Геокодера: {e}")
+        logging.error(f"Ошибка при обработке ответа от Nominatim: {e}")
     return None, None, None, None
 
 # --- Обработчики команд ---

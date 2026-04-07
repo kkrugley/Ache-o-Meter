@@ -2,7 +2,7 @@ import sqlite3
 import logging
 import os
 
-DB_FILE = 'data/users.db'
+DB_FILE = os.getenv("DATABASE_PATH", "data/users.db")
 
 def init_db():
     """Инициализирует БД, создает папку и таблицу."""

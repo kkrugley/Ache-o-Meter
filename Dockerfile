@@ -13,5 +13,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Копируем остальной код проекта в рабочую директорию
 COPY . .
 
-# Команда, которая будет выполняться при запуске контейнера
+# Создаём директорию для БД (для локального запуска / Docker Compose)
+RUN mkdir -p /app/data
+
+# На Railway persistent volume монтируется в /data,
+# и DATABASE_PATH env var должен быть установлен в /data/users.db
 CMD ["python", "bot.py"]
