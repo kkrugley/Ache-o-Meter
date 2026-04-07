@@ -21,7 +21,6 @@ from timezonefinder import TimezoneFinder
 
 # Sentry SDK
 import sentry_sdk
-from sentry_sdk.integrations.aiohttp import AioHttpIntegration
 
 # Logtail handler
 from logtail import LogtailHandler
@@ -37,11 +36,18 @@ SENTRY_DSN = os.getenv("SENTRY_DSN")
 if SENTRY_DSN:
     sentry_sdk.init(
         dsn=SENTRY_DSN,
+        send_default_pii=True,
         traces_sample_rate=1.0,
         environment=os.getenv("SENTRY_ENVIRONMENT", "production"),
-        integrations=[AioHttpIntegration()],
     )
     logging.info("Sentry инициализирован")
+
+    # Тестовая ошибка для проверки (удалить после деплоя)
+    try:
+        division_by_zero = 1 / 0
+    except ZeroDivisionError:
+        sentry_sdk.capture_exception()
+        logging.info("Тестовая ошибка отправлена в Sentry")
 else:
     logging.warning("SENTRY_DSN не установлен — ошибки не будут отправляться в Sentry")
 
