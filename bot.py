@@ -41,13 +41,6 @@ if SENTRY_DSN:
         environment=os.getenv("SENTRY_ENVIRONMENT", "production"),
     )
     logging.info("Sentry инициализирован")
-
-    # Тестовая ошибка для проверки (удалить после деплоя)
-    try:
-        division_by_zero = 1 / 0
-    except ZeroDivisionError:
-        sentry_sdk.capture_exception()
-        logging.info("Тестовая ошибка отправлена в Sentry")
 else:
     logging.warning("SENTRY_DSN не установлен — ошибки не будут отправляться в Sentry")
 
@@ -62,17 +55,24 @@ else:
 
 # Настройка логирования
 log_format = '%(asctime)s - %(levelname)s - %(message)s'
+
+# Получаем root logger
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+
+# Убираем все существующие handlers (чтобы не дублировать)
+root_logger.handlers.clear()
+
+# Всегда добавляем консольный handler
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(logging.Formatter(log_format))
+root_logger.addHandler(console_handler)
+
+# Если есть Logtail — добавляем его
 if logtail_handler:
-    logging.basicConfig(
-        level=logging.INFO,
-        format=log_format,
-        handlers=[
-            logging.StreamHandler(),  # локальные логи
-            logtail_handler,          # облачные логи
-        ]
-    )
-else:
-    logging.basicConfig(level=logging.INFO, format=log_format)
+    logtail_handler.setLevel(logging.INFO)
+    root_logger.addHandler(logtail_handler)
+    logging.info("Logtail handler добавлен")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
