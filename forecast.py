@@ -5,6 +5,13 @@ import asyncio
 import html
 import pytz
 
+# Sentry SDK (опционально)
+try:
+    import sentry_sdk
+    HAS_SENTRY = True
+except ImportError:
+    HAS_SENTRY = False
+
 PARAMETER_DESCRIPTIONS = {
     "pressure": "<b>🌀 Атмосферное давление:</b> Резкие перепады давления — один из главных факторов, влияющих на самочувствие. Они могут вызывать головные боли и изменения артериального давления.",
     "temperature": "<b>🌡️ Температурные колебания:</b> Внезапные изменения температуры заставляют организм адаптироваться, что может быть стрессом, особенно для сердечно-сосудистой системы.",
@@ -58,6 +65,8 @@ async def get_open_meteo_data(lat: float, lon: float):
                 return await response.json()
     except aiohttp.ClientError as e:
         logging.error(f"Ошибка при запросе к Open-Meteo: {e}")
+        if HAS_SENTRY:
+            sentry_sdk.capture_exception(e)
     return {}
 
 
@@ -81,6 +90,8 @@ async def get_air_quality_data(lat: float, lon: float):
                 return await response.json()
     except aiohttp.ClientError as e:
         logging.error(f"Ошибка при запросе к Open-Meteo Air Quality: {e}")
+        if HAS_SENTRY:
+            sentry_sdk.capture_exception(e)
     return {}
 
 
@@ -106,6 +117,8 @@ async def get_noaa_geo_data():
                 return {'geo_forecast': processed_data}
     except aiohttp.ClientError as e:
         logging.error(f"Ошибка при запросе к NOAA: {e}")
+        if HAS_SENTRY:
+            sentry_sdk.capture_exception(e)
     return {}
 
 
@@ -125,6 +138,8 @@ async def get_solar_activity_data():
                 return {'solar_wind_speed': processed_data}
     except aiohttp.ClientError as e:
         logging.error(f"Ошибка при запросе к NOAA (solar wind): {e}")
+        if HAS_SENTRY:
+            sentry_sdk.capture_exception(e)
     return {}
 
 
@@ -209,6 +224,8 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                         risks.append(("Высокий", f"очень резкий перепад давления (изменение на {round(pressure_change_24h)} мм рт. ст. за сутки)"))
                     elif abs(pressure_change_24h) > 3:
                         risks.append(("Средний", f"заметный перепад давления (изменение на {round(pressure_change_24h)} мм рт. ст. за сутки)"))
+                    else:
+                        stats['pressure_status'] = '✅ норма'
 
                     # Скорость изменения давления (мм рт. ст./час)
                     if len(past_24h) >= 2:
@@ -219,6 +236,8 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                             stats['pressure_rate'] = round(pressure_rate, 2)
                             if pressure_rate > 1.0:
                                 risks.append(("Средний", f"быстрое изменение давления ({round(pressure_rate, 1)} мм рт. ст./час)"))
+                            else:
+                                stats['pressure_rate_status'] = '✅ норма'
 
                     # Пиковый час риска по давлению
                     if future_24h:
@@ -251,6 +270,8 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                     risks.append(("Высокий", f"очень резкое изменение температуры (на {round(temp_diff)}°C по сравнению со вчерашним днём)"))
                 elif temp_diff > 5:
                     risks.append(("Средний", f"заметное изменение температуры (на {round(temp_diff)}°C по сравнению со вчерашним днём)"))
+                else:
+                    stats['temp_status'] = '✅ норма'
 
                 # Скорость изменения температуры
                 hourly_temp = data.get('hourly', {}).get('temperature_2m', [])
@@ -272,6 +293,8 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                             stats['temp_rate'] = round(temp_rate, 2)
                             if temp_rate > 2.0:
                                 risks.append(("Средний", f"быстрое изменение температуры ({round(temp_rate, 1)}°C/час)"))
+                            else:
+                                stats['temp_rate_status'] = '✅ норма'
         except (KeyError, IndexError, TypeError) as e:
             logging.warning(f"Не удалось проанализировать температуру: {e}")
 
@@ -296,6 +319,8 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                         risks.append(("Низкий", "очень высокая влажность воздуха"))
                     elif avg_humidity < 30:
                         risks.append(("Низкий", "очень низкая влажность воздуха"))
+                    else:
+                        stats['humidity_status'] = '✅ норма'
         except (KeyError, IndexError, TypeError) as e:
             logging.warning(f"Не удалось проанализировать влажность: {e}")
 
@@ -316,6 +341,8 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                 risks.append(("Высокий", f"ожидается магнитная буря (Kp-индекс до {int(max_kp)})"))
             elif max_kp >= 3:
                 risks.append(("Средний", f"повышенная геомагнитная активность (Kp-индекс до {int(max_kp)})"))
+            else:
+                stats['kp_status'] = '✅ норма'
         except Exception as e:
             logging.warning(f"Не удалось проанализировать геомагнитную обстановку: {e}")
 
@@ -364,24 +391,32 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                         risks.append(("Высокий", f"высокий уровень PM2.5 (средний {round(avg_pm25, 1)} мкг/м³)"))
                     elif avg_pm25 > 15:
                         risks.append(("Средний", f"повышенный уровень PM2.5 (средний {round(avg_pm25, 1)} мкг/м³)"))
+                    else:
+                        stats['pm25_status'] = '✅ норма'
 
                 if next_24h_pm10:
                     avg_pm10 = sum(next_24h_pm10) / len(next_24h_pm10)
                     stats['pm10_avg'] = round(avg_pm10, 1)
                     if avg_pm10 > 50:
                         risks.append(("Средний", f"высокий уровень PM10 (средний {round(avg_pm10, 1)} мкг/м³)"))
+                    else:
+                        stats['pm10_status'] = '✅ норма'
 
                 if next_24h_o3:
                     avg_o3 = sum(next_24h_o3) / len(next_24h_o3)
                     stats['o3_avg'] = round(avg_o3, 1)
                     if avg_o3 > 100:
                         risks.append(("Средний", f"высокий уровень озона (средний {round(avg_o3, 1)} мкг/м³)"))
+                    else:
+                        stats['o3_status'] = '✅ норма'
 
                 if next_24h_no2:
                     avg_no2 = sum(next_24h_no2) / len(next_24h_no2)
                     stats['no2_avg'] = round(avg_no2, 1)
                     if avg_no2 > 40:
                         risks.append(("Низкий", f"повышенный уровень NO₂ (средний {round(avg_no2, 1)} мкг/м³)"))
+                    else:
+                        stats['no2_status'] = '✅ норма'
         except Exception as e:
             logging.warning(f"Не удалось проанализировать качество воздуха: {e}")
 
@@ -409,6 +444,8 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                         risks.append(("Средний", f"высокий UV-индекс (до {round(max_uv, 1)})"))
                     elif max_uv >= 3:
                         risks.append(("Низкий", f"умеренный UV-индекс (до {round(max_uv, 1)})"))
+                    else:
+                        stats['uv_status'] = '✅ норма'
         except Exception as e:
             logging.warning(f"Не удалось проанализировать UV-индекс: {e}")
 
@@ -496,6 +533,8 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                     elif max_diff > 5:
                         direction = "холоднее" if max_apparent < max_real else "теплее"
                         risks.append(("Средний", f"заметная разница между реальной и ощущаемой температурой (разница {round(max_diff)}°C, ощущается {direction})"))
+                    else:
+                        stats['apparent_temp_status'] = '✅ норма'
         except Exception as e:
             logging.warning(f"Не удалось проанализировать ощущаемую температуру: {e}")
 
@@ -525,6 +564,8 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                         risks.append(("Низкий", f"повышенная точка росы (до {round(max_dew)}°C) — ощущается духота"))
                     if min_dew < -15:
                         risks.append(("Низкий", f"очень низкая точка росы (до {round(min_dew)}°C) — сухой морозный воздух"))
+                    if max_dew <= 20 and min_dew >= -15:
+                        stats['dew_point_status'] = '✅ норма'
         except Exception as e:
             logging.warning(f"Не удалось проанализировать точку росы: {e}")
 
@@ -553,6 +594,8 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                         risks.append(("Средний", f"низкая видимость (до {round(min_vis / 1000, 1)} км) — туман или задымление"))
                     elif min_vis < 5000:
                         risks.append(("Низкий", f"пониженная видимость (до {round(min_vis / 1000, 1)} км) — дымка или лёгкий туман"))
+                    else:
+                        stats['visibility_status'] = '✅ норма'
         except Exception as e:
             logging.warning(f"Не удалось проанализировать видимость: {e}")
 
@@ -580,6 +623,8 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                         risks.append(("Средний", f"повышенная конвективная энергия (CAPE до {int(max_cape)} J/kg) — возможна гроза"))
                     elif max_cape > 500:
                         risks.append(("Низкий", f"умеренная конвективная энергия (CAPE до {int(max_cape)} J/kg)"))
+                    else:
+                        stats['cape_status'] = '✅ низкая'
         except Exception as e:
             logging.warning(f"Не удалось проанализировать грозовую активность: {e}")
 
@@ -605,6 +650,8 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                         risks.append(("Средний", f"резкое изменение уровня замерзания (на {int(fl_change)} м за сутки)"))
                     elif fl_change > 500:
                         risks.append(("Низкий", f"заметное изменение уровня замерзания (на {int(fl_change)} м за сутки)"))
+                    else:
+                        stats['freezing_level_status'] = '✅ стабильный'
         except Exception as e:
             logging.warning(f"Не удалось проанализировать уровень замерзания: {e}")
 
@@ -686,110 +733,151 @@ def format_detailed_message(analysis: dict) -> str:
             message += f"{emoji} {html.escape(reason)}\n"
         message += "\n"
 
-    # Таблица статистики
+    # Таблица статистики — ВСЕ параметры
     message += "<b>📊 Подробные данные:</b>\n"
 
     def row(name, value):
         return f"• <b>{name}:</b> {html.escape(str(value))}\n"
 
+    # --- ДАВЛЕНИЕ ---
     if "pressure_min" in stats:
-        message += row("Давление", f"{stats['pressure_min']}–{stats['pressure_max']} мм рт. ст. (Δ {stats['pressure_change_24h']} за 24ч)")
+        status = stats.get('pressure_status', '')
+        message += row("Давление", f"{stats['pressure_min']}–{stats['pressure_max']} мм рт. ст. (Δ {stats['pressure_change_24h']} за 24ч){status}")
     if "pressure_rate" in stats:
-        message += row("Скорость давления", f"{stats['pressure_rate']} мм рт. ст./ч")
+        status = stats.get('pressure_rate_status', '')
+        message += row("Скорость давления", f"{stats['pressure_rate']} мм рт. ст./ч{status}")
     if "pressure_peak_time" in stats:
         message += row("Пик давления", f"~{stats['pressure_peak_time']}")
 
+    # --- ТЕМПЕРАТУРА ---
     if "temp_today_max" in stats:
-        message += row("Температура", f"сегодня {stats['temp_today_max']}°C / вчера {stats['temp_yesterday_max']}°C (Δ {stats['temp_diff']}°C)")
+        status = stats.get('temp_status', '')
+        message += row("Температура", f"сегодня {stats['temp_today_max']}°C / вчера {stats['temp_yesterday_max']}°C (Δ {stats['temp_diff']}°C){status}")
     if "temp_rate" in stats:
-        message += row("Скорость температуры", f"{stats['temp_rate']}°C/ч")
+        status = stats.get('temp_rate_status', '')
+        message += row("Скорость температуры", f"{stats['temp_rate']}°C/ч{status}")
 
+    # --- ВЛАЖНОСТЬ ---
     if "humidity_avg" in stats:
         h = stats['humidity_avg']
-        badge = ""
-        if h > 85: badge = " 🟡 высокая"
-        elif h < 30: badge = " 🟡 низкая"
-        message += row("Влажность", f"{h}%{badge}")
+        badge = stats.get('humidity_status', '')
+        if not badge:
+            if h > 85: badge = "🟡 высокая"
+            elif h < 30: badge = "🟡 низкая"
+            else: badge = "✅ норма"
+        message += row("Влажность", f"{h}% {badge}")
 
+    # --- ГЕОМАГНИТНАЯ АКТИВНОСТЬ ---
     if "kp_max" in stats:
         k = stats['kp_max']
-        badge = ""
-        if k >= 5: badge = " 🔴 буря"
-        elif k >= 3: badge = " 🟡 повышена"
-        message += row("Kp-индекс", f"{k}{badge}")
+        badge = stats.get('kp_status', '')
+        if not badge:
+            if k >= 5: badge = "🔴 буря"
+            elif k >= 3: badge = "🟡 повышена"
+            else: badge = "✅ норма"
+        message += row("Kp-индекс", f"{k} {badge}")
 
+    # --- СОЛНЕЧНЫЙ ВЕТЕР ---
     if "solar_wind_recent" in stats:
-        msg_sw = f"{stats['solar_wind_recent']} км/с (норма {stats['solar_wind_avg']})"
+        msg_sw = f"{stats['solar_wind_recent']} км/с"
         if stats['solar_wind_recent'] > stats['solar_wind_avg'] * 1.5:
             msg_sw += " 🟡 усилен"
+        else:
+            msg_sw += " ✅ норма"
         message += row("Солнечный ветер", msg_sw)
 
+    # --- КАЧЕСТВО ВОЗДУХА ---
     if "pm25_avg" in stats:
         p = stats['pm25_avg']
-        badge = ""
-        if p > 35: badge = " 🔴"
-        elif p > 15: badge = " 🟡"
-        message += row("PM2.5", f"{p} мкг/м³{badge}")
+        badge = stats.get('pm25_status', '')
+        if not badge:
+            if p > 35: badge = "🔴 высокий"
+            elif p > 15: badge = "🟡 повышен"
+            else: badge = "✅ норма"
+        message += row("PM2.5", f"{p} мкг/м³ {badge}")
 
     if "pm10_avg" in stats:
         p = stats['pm10_avg']
-        badge = " 🟡" if p > 50 else ""
-        message += row("PM10", f"{p} мкг/м³{badge}")
+        badge = stats.get('pm10_status', '')
+        if not badge:
+            if p > 50: badge = "🟡 высокий"
+            else: badge = "✅ норма"
+        message += row("PM10", f"{p} мкг/м³ {badge}")
 
     if "o3_avg" in stats:
         o = stats['o3_avg']
-        badge = " 🟡" if o > 100 else ""
-        message += row("Озон O₃", f"{o} мкг/м³{badge}")
+        badge = stats.get('o3_status', '')
+        if not badge:
+            if o > 100: badge = "🟡 высокий"
+            else: badge = "✅ норма"
+        message += row("Озон O₃", f"{o} мкг/м³ {badge}")
 
     if "no2_avg" in stats:
         n = stats['no2_avg']
-        badge = " 🟡" if n > 40 else ""
-        message += row("NO₂", f"{n} мкг/м³{badge}")
+        badge = stats.get('no2_status', '')
+        if not badge:
+            if n > 40: badge = "🟡 повышен"
+            else: badge = "✅ норма"
+        message += row("NO₂", f"{n} мкг/м³ {badge}")
 
+    # --- UV-ИНДЕКС ---
     if "uv_max" in stats:
         u = stats['uv_max']
-        badge = ""
-        if u >= 8: badge = " 🔴 очень высокий"
-        elif u >= 5: badge = " 🟡 высокий"
-        elif u >= 3: badge = " 🟢 умеренный"
-        message += row("UV-индекс", f"{u}{badge}")
+        badge = stats.get('uv_status', '')
+        if not badge:
+            if u >= 8: badge = "🔴 очень высокий"
+            elif u >= 5: badge = "🟡 высокий"
+            elif u >= 3: badge = "🟢 умеренный"
+            else: badge = "✅ низкий"
+        message += row("UV-индекс", f"{u} {badge}")
 
+    # --- ОЩУЩАЕМАЯ ТЕМПЕРАТУРА ---
     if "apparent_temp_diff_max" in stats:
         d = stats['apparent_temp_diff_max']
-        badge = " 🔴" if d > 8 else " 🟡" if d > 5 else ""
-        message += row("Ощущаемая t°", f"{stats['apparent_temp_real']}°C → ощущается {stats['apparent_temp_feels']}°C (разница {d}°C){badge}")
+        badge = "🔴 большая" if d > 8 else "🟡 заметная" if d > 5 else "✅ норма"
+        message += row("Ощущаемая t°", f"{stats['apparent_temp_real']}°C → ощущается {stats['apparent_temp_feels']}°C (разница {d}°C) {badge}")
 
+    # --- ТОЧКА РОСЫ ---
     if "dew_point_max" in stats:
         dp_max = stats['dew_point_max']
         dp_min = stats['dew_point_min']
         badge = ""
-        if dp_max > 20: badge = " 🟡 душно"
-        elif dp_max > 16: badge = " 🟢 лёгкая духота"
+        if dp_max > 20: badge = "🟡 душно"
+        elif dp_max > 16: badge = "🟢 лёгкая духота"
         if dp_min < -15: badge += " 🟢 сухо"
+        if not badge: badge = "✅ норма"
         message += row("Точка росы", f"от {dp_min}°C до {dp_max}°C{badge}")
 
+    # --- ВИДИМОСТЬ ---
     if "visibility_min_km" in stats:
         v = stats['visibility_min_km']
         badge = ""
-        if v < 0.2: badge = " 🔴"
-        elif v < 1: badge = " 🟡"
-        elif v < 5: badge = " 🟢"
-        message += row("Видимость", f"от {v} км{badge}")
+        if v < 0.2: badge = "🔴 экстремально низкая"
+        elif v < 1: badge = "🟡 низкая"
+        elif v < 5: badge = "🟢 пониженная"
+        else: badge = "✅ норма"
+        message += row("Видимость", f"от {v} км {badge}")
 
+    # --- ГРОЗОВАЯ АКТИВНОСТЬ (CAPE) ---
     if "cape_max" in stats:
         c = stats['cape_max']
         badge = ""
-        if c > 2500: badge = " 🔴"
-        elif c > 1000: badge = " 🟡"
-        elif c > 500: badge = " 🟢"
-        message += row("CAPE (гроза)", f"{c} J/kg{badge}")
+        if c > 2500: badge = "🔴 очень высокая"
+        elif c > 1000: badge = "🟡 повышенная"
+        elif c > 500: badge = "🟢 умеренная"
+        else: badge = "✅ низкая"
+        message += row("CAPE (гроза)", f"{c} J/kg {badge}")
 
+    # --- УРОВЕНЬ ЗАМЕРЗАНИЯ ---
     if "freezing_level_change" in stats:
         fl = stats['freezing_level_change']
-        badge = " 🟡" if fl > 800 else " 🟢" if fl > 500 else ""
-        message += row("Уровень замерзания", f"изменение {fl} м{badge}")
+        badge = ""
+        if fl > 800: badge = "🟡 резкое"
+        elif fl > 500: badge = "🟢 заметное"
+        else: badge = "✅ стабильный"
+        message += row("Уровень замерзания", f"изменение {fl} м {badge}")
 
-    # Пыльца (если есть)
+    # --- ПЫЛЬЦА (если есть) ---
     pollen_keys = [k for k in stats if k.startswith('pollen_')]
     if pollen_keys:
         message += "\n<b>🌿 Пыльца:</b>\n"
@@ -801,8 +889,8 @@ def format_detailed_message(analysis: dict) -> str:
         for pk in pollen_keys:
             val = stats[pk]
             name = pollen_names_ru.get(pk, pk)
-            badge = " 🔴" if val > 50 else " 🟡" if val > 20 else " 🟢" if val > 5 else ""
-            message += f"• <b>{name}:</b> {val} grains/m³{badge}\n"
+            badge = "🔴 высокая" if val > 50 else "🟡 повышенная" if val > 20 else "🟢 присутствует" if val > 5 else "✅ низкая"
+            message += f"• <b>{name}:</b> {val} grains/m³ {badge}\n"
 
     message += "\n/info — подробнее о каждом факторе."
     return message

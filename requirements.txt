@@ -6,3 +6,5 @@ timezonefinder
 requests
 pytz
 asyncpg
+sentry-sdk
+logtail-python

@@ -19,12 +19,54 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 from timezonefinder import TimezoneFinder
 
+# Sentry SDK
+import sentry_sdk
+from sentry_sdk.integrations.aiohttp import AioHttpIntegration
+
+# Logtail handler
+from logtail import LogtailHandler
+
 import database as db
 import forecast as fcst
 
 # --- Инициализация и состояния ---
 load_dotenv()
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Sentry init
+SENTRY_DSN = os.getenv("SENTRY_DSN")
+if SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        traces_sample_rate=1.0,
+        environment=os.getenv("SENTRY_ENVIRONMENT", "production"),
+        integrations=[AioHttpIntegration()],
+    )
+    logging.info("Sentry инициализирован")
+else:
+    logging.warning("SENTRY_DSN не установлен — ошибки не будут отправляться в Sentry")
+
+# Logtail handler
+LOGTAIL_TOKEN = os.getenv("LOGTAIL_TOKEN")
+logtail_handler = None
+if LOGTAIL_TOKEN:
+    logtail_handler = LogtailHandler(source_token=LOGTAIL_TOKEN)
+    logging.info("Logtail инициализирован")
+else:
+    logging.warning("LOGTAIL_TOKEN не установлен — логи отправляются только локально")
+
+# Настройка логирования
+log_format = '%(asctime)s - %(levelname)s - %(message)s'
+if logtail_handler:
+    logging.basicConfig(
+        level=logging.INFO,
+        format=log_format,
+        handlers=[
+            logging.StreamHandler(),  # локальные логи
+            logtail_handler,          # облачные логи
+        ]
+    )
+else:
+    logging.basicConfig(level=logging.INFO, format=log_format)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
@@ -41,13 +83,21 @@ class UserState(StatesGroup):
 
 async def send_forecast_to_user(user_id: int, chat_id: int, detailed: bool = False):
     """Готовит и отправляет прогноз конкретному пользователю."""
-    user = await db.get_user_by_id(user_id)
-    if not user or not user['is_active']:
-        logging.warning(f"Попытка отправить прогноз неактивному пользователю {user_id}")
-        return
-
-    logging.info(f"Готовлю прогноз для пользователя {user_id} в городе {user['city']}")
     try:
+        user = await db.get_user_by_id(user_id)
+        if not user or not user['is_active']:
+            logging.warning(f"Попытка отправить прогноз неактивному пользователю {user_id}")
+            return
+
+        # Sentry context
+        if SENTRY_DSN:
+            sentry_sdk.set_user({"id": str(user_id), "username": str(user_id)})
+            sentry_sdk.set_context("user_profile", {
+                "city": user.get('city'),
+                "notification_time": user.get('notification_time'),
+            })
+
+        logging.info(f"Готовлю прогноз для пользователя {user_id} в городе {user['city']}")
         all_data = await fcst.get_forecast_data(user['lat'], user['lon'])
         analysis = fcst.analyze_data_and_form_message(all_data, user_profile=user)
 
@@ -75,6 +125,12 @@ async def send_forecast_to_user(user_id: int, chat_id: int, detailed: bool = Fal
         logging.info(f"Прогноз успешно отправлен пользователю {user_id}")
     except Exception as e:
         logging.error(f"Не удалось отправить прогноз пользователю {user_id}: {e}", exc_info=True)
+        if SENTRY_DSN:
+            sentry_sdk.capture_exception(e)
+        try:
+            await bot.send_message(chat_id, "Произошла ошибка при подготовке прогноза. Попробуйте позже. 😔")
+        except Exception:
+            pass
 
 
 # Простой кэш analysis-данных (user_id -> analysis)
@@ -105,6 +161,8 @@ async def scheduled_check_and_send():
                 await send_forecast_to_user(user['user_id'], user['chat_id'])
         except Exception as e:
             logging.error(f"Планировщик: ошибка при обработке пользователя {user['user_id']}: {e}", exc_info=True)
+            if SENTRY_DSN:
+                sentry_sdk.capture_exception(e)
 
 # --- API Геокодера ---
 
@@ -128,8 +186,12 @@ async def get_coords_by_city(city_name: str):
                     return found_city_name, lat, lon, timezone_str
     except aiohttp.ClientError as e:
         logging.error(f"Ошибка при запросе к Nominatim: {e}")
+        if SENTRY_DSN:
+            sentry_sdk.capture_exception(e)
     except Exception as e:
         logging.error(f"Ошибка при обработке ответа от Nominatim: {e}")
+        if SENTRY_DSN:
+            sentry_sdk.capture_exception(e)
     return None, None, None, None
 
 # --- Обработчики команд ---
@@ -174,35 +236,47 @@ async def handle_stop(message: types.Message):
 
 @dp.message(Command('forecast_now'))
 async def handle_forecast_now(message: types.Message):
-    user = await db.get_user_by_id(message.from_user.id)
-    if user and user['is_active']:
-        await message.answer("Хорошо, сейчас всё проверю и пришлю. Один момент... 🕵️")
-        await send_forecast_to_user(message.from_user.id, message.chat.id)
-    else:
-        await message.answer("Сначала нужно зарегистрироваться. Отправь мне название своего города, чтобы я мог начать работу. /start")
+    try:
+        user = await db.get_user_by_id(message.from_user.id)
+        if user and user['is_active']:
+            await message.answer("Хорошо, сейчас всё проверю и пришлю. Один момент... 🕵️")
+            await send_forecast_to_user(message.from_user.id, message.chat.id)
+        else:
+            await message.answer("Сначала нужно зарегистрироваться. Отправь мне название своего города, чтобы я мог начать работу. /start")
+    except Exception as e:
+        logging.error(f"Ошибка в /forecast_now: {e}", exc_info=True)
+        if SENTRY_DSN:
+            sentry_sdk.capture_exception(e)
+        await message.answer("Произошла ошибка. Попробуйте позже. 😔")
 
 # --- Callback: подробный прогноз ---
 
 @dp.callback_query(F.data.startswith("detailed:"))
 async def handle_detailed_forecast(callback: types.CallbackQuery):
-    hash_key = callback.data.split(":", 1)[1]
-    analysis_json = _forecast_cache.get(hash_key)
-
-    if not analysis_json:
-        await callback.answer("Данные устарели, запросите прогноз заново.", show_alert=True)
-        return
-
-    analysis = json.loads(analysis_json)
-    detailed_msg = fcst.format_detailed_message(analysis)
-
     try:
-        # Редактируем исходное сообщение
-        await callback.message.edit_text(detailed_msg, parse_mode=ParseMode.HTML)
-    except TelegramBadRequest:
-        # Если edit не удался — отправляем новое
-        await callback.message.answer(detailed_msg, parse_mode=ParseMode.HTML)
+        hash_key = callback.data.split(":", 1)[1]
+        analysis_json = _forecast_cache.get(hash_key)
 
-    await callback.answer()
+        if not analysis_json:
+            await callback.answer("Данные устарели, запросите прогноз заново.", show_alert=True)
+            return
+
+        analysis = json.loads(analysis_json)
+        detailed_msg = fcst.format_detailed_message(analysis)
+
+        try:
+            # Редактируем исходное сообщение
+            await callback.message.edit_text(detailed_msg, parse_mode=ParseMode.HTML)
+        except TelegramBadRequest:
+            # Если edit не удался — отправляем новое
+            await callback.message.answer(detailed_msg, parse_mode=ParseMode.HTML)
+
+        await callback.answer()
+    except Exception as e:
+        logging.error(f"Ошибка в handle_detailed_forecast: {e}", exc_info=True)
+        if SENTRY_DSN:
+            sentry_sdk.capture_exception(e)
+        await callback.answer("Произошла ошибка. Попробуйте ещё раз.", show_alert=True)
 
 # --- /settings — расширенное меню ---
 
@@ -434,6 +508,8 @@ async def on_shutdown(dispatcher: Dispatcher):
     scheduler.shutdown(wait=False)
     await db.close_pool()
     await bot.session.close()
+    if SENTRY_DSN:
+        sentry_sdk.flush(timeout=2.0)
     logging.info("Бот остановлен.")
 
 async def main():

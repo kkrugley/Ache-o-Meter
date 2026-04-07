@@ -5,6 +5,9 @@ services:
     build: .
     env_file:
       - .env
+    environment:
+      - DATABASE_URL=postgresql://bot:botpassword@postgres:5432/ache_o_meter
+      - SENTRY_ENVIRONMENT=production
     restart: always
     depends_on:
       - postgres
