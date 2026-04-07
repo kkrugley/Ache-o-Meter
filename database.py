@@ -11,6 +11,11 @@ SENSITIVITY_FIELDS = [
     'sensitivity_geomagnetic',
     'sensitivity_air_quality',
     'sensitivity_uv',
+    'sensitivity_apparent_temperature',
+    'sensitivity_dew_point',
+    'sensitivity_visibility',
+    'sensitivity_storm',
+    'sensitivity_freezing_level',
 ]
 
 ALLERGEN_FIELDS = [
@@ -29,6 +34,11 @@ SENSITIVITY_LABELS = {
     'sensitivity_geomagnetic': '🌌 Геомагнитная',
     'sensitivity_air_quality': '🌫️ Качество воздуха',
     'sensitivity_uv': '☀️ UV-излучение',
+    'sensitivity_apparent_temperature': '🌡️ Ощущаемая температура',
+    'sensitivity_dew_point': '💧 Точка росы',
+    'sensitivity_visibility': '🌫️ Видимость',
+    'sensitivity_storm': '⛈️ Грозовая активность',
+    'sensitivity_freezing_level': '❄️ Уровень замерзания',
 }
 
 ALLERGEN_LABELS = {
@@ -56,6 +66,11 @@ USERS_TABLE_SQL = '''
         sensitivity_geomagnetic BOOLEAN DEFAULT TRUE,
         sensitivity_air_quality BOOLEAN DEFAULT TRUE,
         sensitivity_uv BOOLEAN DEFAULT TRUE,
+        sensitivity_apparent_temperature BOOLEAN DEFAULT TRUE,
+        sensitivity_dew_point BOOLEAN DEFAULT TRUE,
+        sensitivity_visibility BOOLEAN DEFAULT TRUE,
+        sensitivity_storm BOOLEAN DEFAULT TRUE,
+        sensitivity_freezing_level BOOLEAN DEFAULT TRUE,
         allergen_alder BOOLEAN DEFAULT FALSE,
         allergen_birch BOOLEAN DEFAULT FALSE,
         allergen_grass BOOLEAN DEFAULT FALSE,
@@ -85,6 +100,11 @@ async def init_pool():
             await _add_column_if_not_exists(conn, 'users', 'sensitivity_geomagnetic', 'BOOLEAN DEFAULT TRUE')
             await _add_column_if_not_exists(conn, 'users', 'sensitivity_air_quality', 'BOOLEAN DEFAULT TRUE')
             await _add_column_if_not_exists(conn, 'users', 'sensitivity_uv', 'BOOLEAN DEFAULT TRUE')
+            await _add_column_if_not_exists(conn, 'users', 'sensitivity_apparent_temperature', 'BOOLEAN DEFAULT TRUE')
+            await _add_column_if_not_exists(conn, 'users', 'sensitivity_dew_point', 'BOOLEAN DEFAULT TRUE')
+            await _add_column_if_not_exists(conn, 'users', 'sensitivity_visibility', 'BOOLEAN DEFAULT TRUE')
+            await _add_column_if_not_exists(conn, 'users', 'sensitivity_storm', 'BOOLEAN DEFAULT TRUE')
+            await _add_column_if_not_exists(conn, 'users', 'sensitivity_freezing_level', 'BOOLEAN DEFAULT TRUE')
             await _add_column_if_not_exists(conn, 'users', 'allergen_alder', 'BOOLEAN DEFAULT FALSE')
             await _add_column_if_not_exists(conn, 'users', 'allergen_birch', 'BOOLEAN DEFAULT FALSE')
             await _add_column_if_not_exists(conn, 'users', 'allergen_grass', 'BOOLEAN DEFAULT FALSE')

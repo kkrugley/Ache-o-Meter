@@ -3,6 +3,7 @@ import logging
 import os
 from urllib.parse import quote
 from datetime import datetime
+import json
 
 import aiohttp
 import pytz
@@ -38,7 +39,7 @@ class UserState(StatesGroup):
 
 # --- Рассылка и отправка прогнозов ---
 
-async def send_forecast_to_user(user_id: int, chat_id: int):
+async def send_forecast_to_user(user_id: int, chat_id: int, detailed: bool = False):
     """Готовит и отправляет прогноз конкретному пользователю."""
     user = await db.get_user_by_id(user_id)
     if not user or not user['is_active']:
@@ -48,11 +49,45 @@ async def send_forecast_to_user(user_id: int, chat_id: int):
     logging.info(f"Готовлю прогноз для пользователя {user_id} в городе {user['city']}")
     try:
         all_data = await fcst.get_forecast_data(user['lat'], user['lon'])
-        message_text = fcst.analyze_data_and_form_message(all_data, user_profile=user)
-        await bot.send_message(chat_id, message_text)
+        analysis = fcst.analyze_data_and_form_message(all_data, user_profile=user)
+
+        if analysis.get("error"):
+            await bot.send_message(chat_id, "Не удалось получить данные для прогноза. Попробуем позже. 🤷‍♂️")
+            return
+
+        # Сохраняем анализ в JSON для callback
+        analysis_json = json.dumps(analysis, ensure_ascii=False)
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📊 Подробный прогноз", callback_data=f"detailed:{_compact_hash(analysis_json)}")],
+        ])
+
+        # Кэшируем analysis в памяти (для простоты — используем FSM data)
+        # Для надёжности передаём через JSON в callback data
+        compact_msg = fcst.format_compact_message(analysis)
+
+        if detailed:
+            detailed_msg = fcst.format_detailed_message(analysis)
+            await bot.send_message(chat_id, detailed_msg, reply_markup=keyboard)
+        else:
+            await bot.send_message(chat_id, compact_msg, reply_markup=keyboard)
+
         logging.info(f"Прогноз успешно отправлен пользователю {user_id}")
     except Exception as e:
         logging.error(f"Не удалось отправить прогноз пользователю {user_id}: {e}", exc_info=True)
+
+
+# Простой кэш analysis-данных (user_id -> analysis)
+_forecast_cache = {}
+
+
+def _compact_hash(analysis_json: str) -> str:
+    """Хранит analysis в кэше, возвращает короткий ключ."""
+    import hashlib
+    key = hashlib.md5(analysis_json.encode()).hexdigest()[:8]
+    _forecast_cache[key] = analysis_json
+    return key
+
 
 async def scheduled_check_and_send():
     """Планировщик: проверяет пользователей и отправляет им прогноз по расписанию."""
@@ -145,6 +180,29 @@ async def handle_forecast_now(message: types.Message):
         await send_forecast_to_user(message.from_user.id, message.chat.id)
     else:
         await message.answer("Сначала нужно зарегистрироваться. Отправь мне название своего города, чтобы я мог начать работу. /start")
+
+# --- Callback: подробный прогноз ---
+
+@dp.callback_query(F.data.startswith("detailed:"))
+async def handle_detailed_forecast(callback: types.CallbackQuery):
+    hash_key = callback.data.split(":", 1)[1]
+    analysis_json = _forecast_cache.get(hash_key)
+
+    if not analysis_json:
+        await callback.answer("Данные устарели, запросите прогноз заново.", show_alert=True)
+        return
+
+    analysis = json.loads(analysis_json)
+    detailed_msg = fcst.format_detailed_message(analysis)
+
+    try:
+        # Редактируем исходное сообщение
+        await callback.message.edit_text(detailed_msg, parse_mode=ParseMode.HTML)
+    except TelegramBadRequest:
+        # Если edit не удался — отправляем новое
+        await callback.message.answer(detailed_msg, parse_mode=ParseMode.HTML)
+
+    await callback.answer()
 
 # --- /settings — расширенное меню ---
 
