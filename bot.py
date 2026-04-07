@@ -39,7 +39,7 @@ class UserState(StatesGroup):
 
 async def send_forecast_to_user(user_id: int, chat_id: int):
     """Готовит и отправляет прогноз конкретному пользователю."""
-    user = db.get_user_by_id(user_id)
+    user = await db.get_user_by_id(user_id)
     if not user or not user['is_active']:
         logging.warning(f"Попытка отправить прогноз неактивному пользователю {user_id}")
         return
@@ -47,7 +47,7 @@ async def send_forecast_to_user(user_id: int, chat_id: int):
     logging.info(f"Готовлю прогноз для пользователя {user_id} в городе {user['city']}")
     try:
         all_data = await fcst.get_forecast_data(user['lat'], user['lon'])
-        message_text = fcst.analyze_data_and_form_message(all_data)
+        message_text = fcst.analyze_data_and_form_message(all_data, user_profile=user)
         await bot.send_message(chat_id, message_text)
         logging.info(f"Прогноз успешно отправлен пользователю {user_id}")
     except Exception as e:
@@ -56,7 +56,7 @@ async def send_forecast_to_user(user_id: int, chat_id: int):
 async def scheduled_check_and_send():
     """Планировщик: проверяет пользователей и отправляет им прогноз по расписанию."""
     logging.info("Планировщик: начинаю ежечасную проверку пользователей.")
-    users = db.get_all_active_users()
+    users = await db.get_all_active_users()
     if not users:
         return
 
@@ -114,7 +114,7 @@ async def handle_help(message: types.Message):
         "✅ Ежедневно присылаю прогноз для метеочувствительных людей.\n\n"
         "<b>Основные команды:</b>\n"
         "/start - Начать работу с ботом.\n"
-        "/settings - Изменить город или время уведомлений.\n"
+        "/settings - Изменить город, время, чувствительность и аллергены.\n"
         "/forecast_now - Получить прогноз немедленно.\n"
         "/stop - Приостановить рассылку.\n"
         "/info - Узнать о факторах, влияющих на самочувствие.\n"
@@ -133,30 +133,170 @@ async def handle_info(message: types.Message):
 
 @dp.message(Command('stop'))
 async def handle_stop(message: types.Message):
-    db.set_user_active(message.from_user.id, is_active=False)
+    await db.set_user_active(message.from_user.id, is_active=False)
     await message.answer("Я понял, больше не буду беспокоить. 😴\nЕсли передумаешь, просто напиши мне название города, и подписка возобновится.")
 
 @dp.message(Command('forecast_now'))
 async def handle_forecast_now(message: types.Message):
-    user = db.get_user_by_id(message.from_user.id)
+    user = await db.get_user_by_id(message.from_user.id)
     if user and user['is_active']:
         await message.answer("Хорошо, сейчас всё проверю и пришлю. Один момент... 🕵️")
         await send_forecast_to_user(message.from_user.id, message.chat.id)
     else:
         await message.answer("Сначала нужно зарегистрироваться. Отправь мне название своего города, чтобы я мог начать работу. /start")
 
+# --- /settings — расширенное меню ---
+
 @dp.message(Command('settings'))
 async def handle_settings(message: types.Message):
-    user = db.get_user_by_id(message.from_user.id)
-    city_info = f"Ваш текущий город: <b>{user['city']}</b>." if user and user['city'] else "Город не установлен."
+    user = await db.get_user_by_id(message.from_user.id)
+    if not user:
+        await message.answer("Сначала нужно зарегистрироваться. Отправь мне название своего города. /start")
+        return
+
+    city_info = f"🌍 <b>Город:</b> {user['city']}" if user.get('city') else "🌍 <b>Город:</b> не установлен"
+    time_info = f"⏰ <b>Время уведомлений:</b> {user['notification_time']}"
+
+    text = f"⚙️ <b>Настройки</b>\n\n{city_info}\n{time_info}\n\nВыберите раздел:"
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Изменить город", callback_data="change_city")],
-        [InlineKeyboardButton(text="Изменить время", callback_data="change_time")]
+        [InlineKeyboardButton(text="🌍 Город и время", callback_data="settings_location")],
+        [InlineKeyboardButton(text="⚡ Чувствительность", callback_data="settings_sensitivity")],
+        [InlineKeyboardButton(text="🌿 Аллергены", callback_data="settings_allergens")],
     ])
-    await message.answer(f"{city_info}\nЧто вы хотите настроить?", reply_markup=keyboard)
+    await message.answer(text, reply_markup=keyboard)
 
-# --- Обработка колбэков и состояний ---
+# --- Подменю: Город и время ---
+
+@dp.callback_query(F.data == "settings_location")
+async def process_location_submenu(callback: types.CallbackQuery):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Изменить город", callback_data="change_city")],
+        [InlineKeyboardButton(text="⏰ Изменить время", callback_data="change_time")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="settings_back")],
+    ])
+    await callback.message.edit_text("🌍 <b>Город и время</b>\n\nЧто хотите изменить?", reply_markup=keyboard)
+    await callback.answer()
+
+# --- Подменю: Чувствительность ---
+
+@dp.callback_query(F.data == "settings_sensitivity")
+async def process_sensitivity_menu(callback: types.CallbackQuery):
+    user = await db.get_user_by_id(callback.from_user.id)
+    if not user:
+        await callback.answer("Пользователь не найден", show_alert=True)
+        return
+
+    text = "⚡ <b>Чувствительность</b>\n\nВключите или выключите факторы, которые влияют на ваше самочувствие. Бот будет учитывать только выбранные параметры:\n"
+    buttons = []
+    for field, label in db.SENSITIVITY_LABELS.items():
+        is_on = user.get(field, True)
+        status = "✅" if is_on else "❌"
+        toggle_value = "off" if is_on else "on"
+        buttons.append([InlineKeyboardButton(
+            text=f"{status} {label}",
+            callback_data=f"toggle_sens_{field}_{toggle_value}"
+        )])
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="settings_back")])
+
+    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("toggle_sens_"))
+async def process_sensitivity_toggle(callback: types.CallbackQuery):
+    # toggle_sens_{field}_{on/off}
+    parts = callback.data.split("_")
+    field = parts[2]
+    action = parts[3]
+    value = action == "on"
+
+    await db.update_user_sensitivity(callback.from_user.id, field, value)
+
+    # Re-render sensitivity menu
+    user = await db.get_user_by_id(callback.from_user.id)
+    text = "⚡ <b>Чувствительность</b>\n\nВключите или выключите факторы:\n"
+    buttons = []
+    for f, label in db.SENSITIVITY_LABELS.items():
+        is_on = user.get(f, True)
+        status = "✅" if is_on else "❌"
+        toggle_value = "off" if is_on else "on"
+        buttons.append([InlineKeyboardButton(
+            text=f"{status} {label}",
+            callback_data=f"toggle_sens_{f}_{toggle_value}"
+        )])
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="settings_back")])
+
+    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    await callback.answer()
+
+# --- Подменю: Аллергены ---
+
+@dp.callback_query(F.data == "settings_allergens")
+async def process_allergens_menu(callback: types.CallbackQuery):
+    user = await db.get_user_by_id(callback.from_user.id)
+    if not user:
+        await callback.answer("Пользователь не найден", show_alert=True)
+        return
+
+    text = "🌿 <b>Аллергены</b>\n\nУкажите, на какую пыльцу у вас аллергия. Бот будет учитывать концентрацию выбранной пыльцы в прогнозе:\n"
+    buttons = []
+    for field, label in db.ALLERGEN_LABELS.items():
+        is_on = user.get(field, False)
+        status = "✅" if is_on else "❌"
+        toggle_value = "off" if is_on else "on"
+        buttons.append([InlineKeyboardButton(
+            text=f"{status} {label}",
+            callback_data=f"toggle_allergen_{field}_{toggle_value}"
+        )])
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="settings_back")])
+
+    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("toggle_allergen_"))
+async def process_allergen_toggle(callback: types.CallbackQuery):
+    parts = callback.data.split("_")
+    field = parts[2]
+    action = parts[3]
+    value = action == "on"
+
+    await db.update_user_allergen(callback.from_user.id, field, value)
+
+    user = await db.get_user_by_id(callback.from_user.id)
+    text = "🌿 <b>Аллергены</b>\n\nУкажите, на какую пыльцу у вас аллергия:\n"
+    buttons = []
+    for f, label in db.ALLERGEN_LABELS.items():
+        is_on = user.get(f, False)
+        status = "✅" if is_on else "❌"
+        toggle_value = "off" if is_on else "on"
+        buttons.append([InlineKeyboardButton(
+            text=f"{status} {label}",
+            callback_data=f"toggle_allergen_{f}_{toggle_value}"
+        )])
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="settings_back")])
+
+    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    await callback.answer()
+
+# --- Кнопка «Назад» в главное меню настроек ---
+
+@dp.callback_query(F.data == "settings_back")
+async def process_settings_back(callback: types.CallbackQuery):
+    user = await db.get_user_by_id(callback.from_user.id)
+    city_info = f"🌍 <b>Город:</b> {user['city']}" if user.get('city') else "🌍 <b>Город:</b> не установлен"
+    time_info = f"⏰ <b>Время уведомлений:</b> {user['notification_time']}"
+
+    text = f"⚙️ <b>Настройки</b>\n\n{city_info}\n{time_info}\n\nВыберите раздел:"
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🌍 Город и время", callback_data="settings_location")],
+        [InlineKeyboardButton(text="⚡ Чувствительность", callback_data="settings_sensitivity")],
+        [InlineKeyboardButton(text="🌿 Аллергены", callback_data="settings_allergens")],
+    ])
+    await callback.message.edit_text(text, reply_markup=keyboard)
+    await callback.answer()
+
+# --- Обработка колбэков и состояний (из старого /settings) ---
 
 @dp.callback_query(F.data == "change_city")
 async def process_change_city_callback(callback: types.CallbackQuery):
@@ -173,7 +313,7 @@ async def process_change_time_callback(callback: types.CallbackQuery, state: FSM
 async def process_new_time(message: types.Message, state: FSMContext):
     try:
         datetime.strptime(message.text, '%H:%M')
-        db.update_user_notification_time(message.from_user.id, message.text)
+        await db.update_user_notification_time(message.from_user.id, message.text)
         await message.answer(f"Отлично! Новое время уведомлений установлено на <b>{message.text}</b>.")
         await state.clear()
     except ValueError:
@@ -186,7 +326,7 @@ async def process_city_confirmation(callback: types.CallbackQuery, state: FSMCon
 
     if action == "yes":
         city_info = user_data['city_info']
-        db.add_or_update_user(
+        await db.add_or_update_user(
             user_id=callback.from_user.id,
             chat_id=callback.message.chat.id,
             city=city_info['name'],
@@ -195,7 +335,7 @@ async def process_city_confirmation(callback: types.CallbackQuery, state: FSMCon
             timezone=city_info['tz']
         )
         await callback.message.edit_text(f"Отлично! Я запомнил: <b>{city_info['name']}</b>. 😎\n\nТеперь ты в деле! Если хочешь изменить настройки, используй /settings.")
-    else: # action == 'no'
+    else:
         await callback.message.edit_text("Понял, ничего не меняю. Если передумаешь, просто напиши мне название города.")
 
     await state.clear()
@@ -208,13 +348,11 @@ async def handle_text_message(message: types.Message, state: FSMContext):
     found_city_name, lat, lon, timezone = await get_coords_by_city(message.text)
 
     if lat and lon and timezone:
-        # Сохраняем найденные данные в состояние FSM
         await state.set_data({
             'city_info': {'name': found_city_name, 'lat': lat, 'lon': lon, 'tz': timezone}
         })
         await state.set_state(UserState.waiting_for_city_confirmation)
 
-        # Создаем клавиатуру для подтверждения
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✅ Да, это он", callback_data="confirm_city_yes")],
             [InlineKeyboardButton(text="❌ Нет, другой", callback_data="confirm_city_no")]
@@ -229,16 +367,17 @@ async def handle_text_message(message: types.Message, state: FSMContext):
 async def on_shutdown(dispatcher: Dispatcher):
     logging.info("Остановка бота...")
     scheduler.shutdown(wait=False)
+    await db.close_pool()
     await bot.session.close()
     logging.info("Бот остановлен.")
 
 async def main():
-    db.init_db()
+    await db.init_pool()
     dp.shutdown.register(on_shutdown)
-    
+
     scheduler.add_job(scheduled_check_and_send, 'cron', hour='*', minute=0)
     scheduler.start()
-    
+
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 

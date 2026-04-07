@@ -6,6 +6,18 @@ services:
     env_file:
       - .env
     restart: always
+    depends_on:
+      - postgres
+
+  postgres:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: ache_o_meter
+      POSTGRES_USER: bot
+      POSTGRES_PASSWORD: botpassword
     volumes:
-      # Эта строка сохранит файл users.db между перезапусками
-      - ./data:/app/data
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

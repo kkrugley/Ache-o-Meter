@@ -4,6 +4,13 @@ FROM python:3.10-slim
 # Устанавливаем рабочую директорию внутри контейнера
 WORKDIR /app
 
+# Устанавливаем зависимости для компиляции asyncpg
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    python3-dev \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # Копируем файл с зависимостями в контейнер
 COPY requirements.txt .
 
@@ -13,9 +20,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Копируем остальной код проекта в рабочую директорию
 COPY . .
 
-# Создаём директорию для БД (для локального запуска / Docker Compose)
-RUN mkdir -p /app/data
-
-# На Railway persistent volume монтируется в /data,
-# и DATABASE_PATH env var должен быть установлен в /data/users.db
+# На Railway DATABASE_URL указывает на PostgreSQL сервис
 CMD ["python", "bot.py"]

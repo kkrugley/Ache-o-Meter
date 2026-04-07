@@ -5,3 +5,4 @@ apscheduler
 timezonefinder
 requests
 pytz
+asyncpg
