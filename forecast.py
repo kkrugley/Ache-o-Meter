@@ -7,6 +7,7 @@ import html
 import pytz
 
 from utils import parse_timezone_aware, max_rate_of_change
+from solar_data import get_noaa_ap_index, get_solar_flares
 
 # Re-export for backward compatibility (tests import from forecast)
 __all__ = ['parse_timezone_aware', 'max_rate_of_change',
@@ -45,17 +46,21 @@ async def get_forecast_data(lat: float, lon: float):
     качестве воздуха и пыльце.
     Возвращает dict с РАЗДЕЛЬНЫМИ ключами для weather и air_quality.
     """
-    weather_data, geo_data, solar_data, air_data = await asyncio.gather(
+    weather_data, geo_data, solar_data, air_data, ap_data, flare_data = await asyncio.gather(
         get_open_meteo_data(lat, lon),
         get_noaa_geo_data(),
         get_solar_activity_data(),
         get_air_quality_data(lat, lon),
+        get_noaa_ap_index(),
+        get_solar_flares(),
     )
     return {
         'weather': weather_data,
         'air_quality': air_data,
         'geo': geo_data,
         'solar': solar_data,
+        'ap': ap_data,
+        'flares': flare_data,
     }
 
 

@@ -170,6 +170,20 @@ def score_geomagnetic(max_kp):
     return round(score, 1), {'kp_max': int(max_kp) if max_kp else 0}
 
 
+def score_ap(max_ap: float) -> tuple:
+    """Ap-индекс: линейная шкала, лучше для scoring."""
+    score = 0.0
+    if max_ap >= 100:
+        score = 10
+    elif max_ap >= 50:
+        score = 7
+    elif max_ap >= 30:
+        score = 4
+    elif max_ap >= 15:
+        score = 2
+    return round(score, 1), {'ap_max': max_ap}
+
+
 def score_air_quality(pm25_avg, pm10_avg, o3_avg, no2_avg):
     scores = {}
     scores['pm25'] = 8 if pm25_avg > 35 else (4 if pm25_avg > 15 else 0)
