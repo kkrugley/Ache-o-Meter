@@ -206,27 +206,19 @@ async def update_user_notification_time(user_id, new_time: str):
 async def update_user_sensitivity(user_id, field: str, value: bool):
     """Обновляет флаг чувствительности пользователя."""
     if field not in SENSITIVITY_FIELDS:
-        logging.error(f"Неизвестное поле чувствительности: {field}")
-        return
-    try:
-        async with _pool.acquire() as conn:
-            await conn.execute(f"UPDATE users SET {field} = $1 WHERE user_id = $2", value, user_id)
-        logging.info(f"Чувствительность {field} для пользователя {user_id} = {value}.")
-    except Exception as e:
-        logging.error(f"Ошибка при обновлении чувствительности {field} для {user_id}: {e}")
+        raise ValueError(f"Неизвестное поле чувствительности: {field}")
+    async with _pool.acquire() as conn:
+        await conn.execute(f"UPDATE users SET {field} = $1 WHERE user_id = $2", value, user_id)
+    logging.info(f"Чувствительность {field} для пользователя {user_id} = {value}.")
 
 
 async def update_user_allergen(user_id, field: str, value: bool):
     """Обновляет флаг аллергена пользователя."""
     if field not in ALLERGEN_FIELDS:
-        logging.error(f"Неизвестное поле аллергена: {field}")
-        return
-    try:
-        async with _pool.acquire() as conn:
-            await conn.execute(f"UPDATE users SET {field} = $1 WHERE user_id = $2", value, user_id)
-        logging.info(f"Аллерген {field} для пользователя {user_id} = {value}.")
-    except Exception as e:
-        logging.error(f"Ошибка при обновлении аллергена {field} для {user_id}: {e}")
+        raise ValueError(f"Неизвестное поле аллергена: {field}")
+    async with _pool.acquire() as conn:
+        await conn.execute(f"UPDATE users SET {field} = $1 WHERE user_id = $2", value, user_id)
+    logging.info(f"Аллерген {field} для пользователя {user_id} = {value}.")
 
 
 async def get_all_active_users():
@@ -270,7 +262,11 @@ async def save_feedback(user_id: int, feedback_data: dict):
                     respiratory=EXCLUDED.respiratory,
                     allergy_symptoms=EXCLUDED.allergy_symptoms,
                     forecast_risk_score=EXCLUDED.forecast_risk_score,
-                    forecast_risk_level=EXCLUDED.forecast_risk_level
+                    forecast_risk_level=EXCLUDED.forecast_risk_level,
+                    pressure_change=EXCLUDED.pressure_change,
+                    temp_change=EXCLUDED.temp_change,
+                    kp_max=EXCLUDED.kp_max,
+                    pm25_avg=EXCLUDED.pm25_avg
             ''',
                 user_id,
                 feedback_data['forecast_date'],
