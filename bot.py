@@ -108,6 +108,17 @@ async def send_forecast_to_user(user_id: int, chat_id: int, detailed: bool = Fal
         all_data = await fcst.get_forecast_data(user['lat'], user['lon'])
         analysis = fcst.analyze_data_and_form_message(all_data, user_profile=user)
 
+        # Сохраняем снимок метрик для вечернего feedback
+        forecast_snapshot = {
+            'total_score': analysis.get('total_score', 0),
+            'risk_level': analysis.get('risk_level', ''),
+            'pressure_change': analysis.get('stats', {}).get('pressure_change_mmhg', 0),
+            'temp_change': analysis.get('stats', {}).get('temp_diff', 0),
+            'kp_max': analysis.get('stats', {}).get('kp_max', 0),
+            'pm25_avg': analysis.get('stats', {}).get('pm25_avg', 0),
+        }
+        _forecast_cache[f"metrics:{user_id}"] = forecast_snapshot
+
         if analysis.get("error"):
             await bot.send_message(chat_id, "Не удалось получить данные для прогноза. Попробуем позже. 🤷‍♂️")
             return
