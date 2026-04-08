@@ -34,6 +34,7 @@ async def get_forecast_data(lat: float, lon: float):
     """
     Асинхронно собирает все необходимые данные о погоде, геомагнитной и солнечной активности,
     качестве воздуха и пыльце.
+    Возвращает dict с РАЗДЕЛЬНЫМИ ключами для weather и air_quality.
     """
     weather_data, geo_data, solar_data, air_data = await asyncio.gather(
         get_open_meteo_data(lat, lon),
@@ -41,7 +42,12 @@ async def get_forecast_data(lat: float, lon: float):
         get_solar_activity_data(),
         get_air_quality_data(lat, lon),
     )
-    return {**weather_data, **geo_data, **solar_data, **air_data}
+    return {
+        'weather': weather_data,
+        'air_quality': air_data,
+        'geo': geo_data,
+        'solar': solar_data,
+    }
 
 
 async def get_open_meteo_data(lat: float, lon: float):
@@ -192,11 +198,17 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
     # Статистика для детального отчёта
     stats = {}
 
+    # Разделяем источники данных
+    weather_hourly = data.get('weather', {}).get('hourly', {})
+    weather_times = weather_hourly.get('time', [])
+    air_hourly = data.get('air_quality', {}).get('hourly', {})
+    air_times = air_hourly.get('time', [])
+
     # 1. Анализ Атмосферного давления
     if sensitivities['pressure']:
         try:
-            hourly_pressure = data.get('hourly', {}).get('surface_pressure', [])
-            hourly_times = data.get('hourly', {}).get('time', [])
+            hourly_pressure = weather_hourly.get('surface_pressure', [])
+            hourly_times = weather_times
             if hourly_pressure and hourly_times:
                 past_24h = []
                 future_24h = []
@@ -257,7 +269,7 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
     # 2. Анализ Температурных колебаний
     if sensitivities['temperature']:
         try:
-            daily_temp = data.get('daily', {})
+            daily_temp = data.get('weather', {}).get('daily', {})
             if daily_temp.get('temperature_2m_max'):
                 today_max = daily_temp['temperature_2m_max'][1] if len(daily_temp['temperature_2m_max']) > 1 else daily_temp['temperature_2m_max'][0]
                 yesterday_max = daily_temp['temperature_2m_max'][0]
@@ -274,8 +286,8 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                     stats['temp_status'] = '✅ норма'
 
                 # Скорость изменения температуры
-                hourly_temp = data.get('hourly', {}).get('temperature_2m', [])
-                hourly_times = data.get('hourly', {}).get('time', [])
+                hourly_temp = weather_hourly.get('temperature_2m', [])
+                hourly_times = weather_times
                 if hourly_temp and hourly_times and len(hourly_temp) >= 2:
                     recent = []
                     for t, temp in zip(hourly_times, hourly_temp):
@@ -301,8 +313,8 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
     # 3. Анализ Влажности
     if sensitivities['humidity']:
         try:
-            hourly_humidity = data.get('hourly', {}).get('relative_humidity_2m', [])
-            hourly_times = data.get('hourly', {}).get('time', [])
+            hourly_humidity = weather_hourly.get('relative_humidity_2m', [])
+            hourly_times = weather_times
             if hourly_humidity and hourly_times:
                 past_24h_humidity = []
                 for t, h in zip(hourly_times, hourly_humidity):
@@ -327,7 +339,7 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
     # 4. Анализ Геомагнитной активности (Kp-индекс)
     if sensitivities['geomagnetic']:
         try:
-            geo_forecast = data.get('geo_forecast', [])
+            geo_forecast = data.get('geo', {}).get('geo_forecast', [])
             future_limit = datetime.utcnow().replace(tzinfo=pytz.UTC) + timedelta(hours=24)
             max_kp = 0
             for forecast in geo_forecast:
@@ -348,7 +360,7 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
 
     # 5. Анализ Солнечной активности (Солнечный ветер)
     try:
-        solar_wind = data.get('solar_wind_speed', [])
+        solar_wind = data.get('solar', {}).get('solar_wind_speed', [])
         if solar_wind:
             recent_avg = sum(solar_wind[-12:]) / 12 if len(solar_wind) >= 12 else 0
             historical_avg = sum(solar_wind) / len(solar_wind) if solar_wind else 0
@@ -362,11 +374,11 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
     # 6. Анализ Качества воздуха (PM2.5, PM10, NO₂, O₃)
     if sensitivities['air_quality']:
         try:
-            hourly_pm25 = data.get('hourly', {}).get('pm2_5', [])
-            hourly_pm10 = data.get('hourly', {}).get('pm10', [])
-            hourly_no2 = data.get('hourly', {}).get('nitrogen_dioxide', [])
-            hourly_o3 = data.get('hourly', {}).get('ozone', [])
-            hourly_times = data.get('hourly', {}).get('time', [])
+            hourly_pm25 = air_hourly.get('pm2_5', [])
+            hourly_pm10 = air_hourly.get('pm10', [])
+            hourly_no2 = air_hourly.get('nitrogen_dioxide', [])
+            hourly_o3 = air_hourly.get('ozone', [])
+            hourly_times = air_times
 
             if hourly_pm25 and hourly_times:
                 next_24h_pm25 = []
@@ -423,8 +435,8 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
     # 7. Анализ UV-индекса
     if sensitivities['uv']:
         try:
-            hourly_uv = data.get('hourly', {}).get('uv_index', [])
-            hourly_times = data.get('hourly', {}).get('time', [])
+            hourly_uv = air_hourly.get('uv_index', [])
+            hourly_times = air_times
             if hourly_uv and hourly_times:
                 next_24h_uv = []
                 for i, t in enumerate(hourly_times):
@@ -452,7 +464,7 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
     # 8. Анализ Пыльцы (если у пользователя есть аллергены)
     if has_allergen_sensitivity:
         try:
-            hourly_times = data.get('hourly', {}).get('time', [])
+            hourly_times = air_times
             pollen_map = {
                 'alder': 'alder_pollen',
                 'birch': 'birch_pollen',
@@ -476,7 +488,7 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                 api_key = pollen_map.get(allergen_key)
                 if not api_key:
                     continue
-                hourly_pollen = data.get('hourly', {}).get(api_key, [])
+                hourly_pollen = air_hourly.get(api_key, [])
                 if not hourly_pollen:
                     continue
 
@@ -505,9 +517,9 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
     # 9. Анализ ощущаемой температуры
     if sensitivities['apparent_temperature']:
         try:
-            hourly_temp = data.get('hourly', {}).get('temperature_2m', [])
-            hourly_apparent = data.get('hourly', {}).get('apparent_temperature', [])
-            hourly_times = data.get('hourly', {}).get('time', [])
+            hourly_temp = weather_hourly.get('temperature_2m', [])
+            hourly_apparent = weather_hourly.get('apparent_temperature', [])
+            hourly_times = weather_times
             if hourly_temp and hourly_apparent and hourly_times:
                 next_24h_diffs = []
                 for i, t in enumerate(hourly_times):
@@ -541,8 +553,8 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
     # 10. Анализ точки росы
     if sensitivities['dew_point']:
         try:
-            hourly_dew = data.get('hourly', {}).get('dew_point_2m', [])
-            hourly_times = data.get('hourly', {}).get('time', [])
+            hourly_dew = weather_hourly.get('dew_point_2m', [])
+            hourly_times = weather_times
             if hourly_dew and hourly_times:
                 next_24h_dew = []
                 for i, t in enumerate(hourly_times):
@@ -572,8 +584,8 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
     # 11. Анализ видимости
     if sensitivities['visibility']:
         try:
-            hourly_vis = data.get('hourly', {}).get('visibility', [])
-            hourly_times = data.get('hourly', {}).get('time', [])
+            hourly_vis = weather_hourly.get('visibility', [])
+            hourly_times = weather_times
             if hourly_vis and hourly_times:
                 next_24h_vis = []
                 for i, t in enumerate(hourly_times):
@@ -602,8 +614,8 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
     # 12. Анализ грозовой активности (CAPE)
     if sensitivities['storm']:
         try:
-            hourly_cape = data.get('hourly', {}).get('cape', [])
-            hourly_times = data.get('hourly', {}).get('time', [])
+            hourly_cape = weather_hourly.get('cape', [])
+            hourly_times = weather_times
             if hourly_cape and hourly_times:
                 next_24h_cape = []
                 for i, t in enumerate(hourly_times):
@@ -631,8 +643,8 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
     # 13. Анализ уровня замерзания
     if sensitivities['freezing_level']:
         try:
-            hourly_fl = data.get('hourly', {}).get('freezing_level_height', [])
-            hourly_times = data.get('hourly', {}).get('time', [])
+            hourly_fl = weather_hourly.get('freezing_level_height', [])
+            hourly_times = weather_times
             if hourly_fl and hourly_times:
                 next_24h_fl = []
                 for i, t in enumerate(hourly_times):
