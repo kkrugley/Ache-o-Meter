@@ -275,9 +275,9 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                     stats['pressure_max'] = round(max(p for _, p in past_24h + future_24h) * hpa_to_mmhg, 1)
                     stats['pressure_change_24h'] = round(pressure_change_24h, 1)
 
-                    if abs(pressure_change_24h) > 7:
+                    if abs(pressure_change_24h) > 10:
                         risks.append(("Высокий", f"очень резкий перепад давления (изменение на {round(pressure_change_24h)} мм рт. ст. за сутки)"))
-                    elif abs(pressure_change_24h) > 3:
+                    elif abs(pressure_change_24h) > 5:
                         risks.append(("Средний", f"заметный перепад давления (изменение на {round(pressure_change_24h)} мм рт. ст. за сутки)"))
                     else:
                         stats['pressure_status'] = '✅ норма'
@@ -294,7 +294,9 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                         stats['pressure_rate'] = round(max_pressure_rate, 2)
                         if pressure_peak:
                             stats['pressure_peak_time'] = pressure_peak.strftime('%H:%M')
-                        if max_pressure_rate > 1.0:
+                        if max_pressure_rate > 1.5:
+                            risks.append(("Высокий", f"очень быстрое изменение давления ({round(max_pressure_rate, 1)} мм рт. ст./час)"))
+                        elif max_pressure_rate > 1.0:
                             risks.append(("Средний", f"быстрое изменение давления ({round(max_pressure_rate, 1)} мм рт. ст./час)"))
                         else:
                             stats['pressure_rate_status'] = '✅ норма'
@@ -397,10 +399,12 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
 
             stats['kp_max'] = int(max_kp) if max_kp else 0
 
-            if max_kp >= 5:
-                risks.append(("Высокий", f"ожидается магнитная буря (Kp-индекс до {int(max_kp)})"))
-            elif max_kp >= 3:
-                risks.append(("Средний", f"повышенная геомагнитная активность (Kp-индекс до {int(max_kp)})"))
+            if max_kp >= 7:
+                risks.append(("Высокий", f"сильная магнитная буря (Kp-индекс до {int(max_kp)})"))
+            elif max_kp >= 5:
+                risks.append(("Средний", f"магнитная буря (Kp-индекс до {int(max_kp)})"))
+            elif max_kp >= 4:
+                risks.append(("Низкий", f"повышенная геомагнитная активность (Kp-индекс до {int(max_kp)})"))
             else:
                 stats['kp_status'] = '✅ норма'
         except Exception as e:
