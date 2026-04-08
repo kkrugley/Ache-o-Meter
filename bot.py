@@ -27,6 +27,7 @@ from logtail import LogtailHandler
 
 import database as db
 import forecast as fcst
+from feedback_handler import ask_evening_feedback, get_symptoms_keyboard
 
 # --- Инициализация и состояния ---
 load_dotenv()
@@ -302,6 +303,7 @@ async def handle_settings(message: types.Message):
         [InlineKeyboardButton(text="🌍 Город и время", callback_data="settings_location")],
         [InlineKeyboardButton(text="⚡ Чувствительность", callback_data="settings_sensitivity")],
         [InlineKeyboardButton(text="🌿 Аллергены", callback_data="settings_allergens")],
+        [InlineKeyboardButton(text="📝 Обратная связь", callback_data="settings_feedback")],
     ])
     await message.answer(text, reply_markup=keyboard)
 
@@ -437,6 +439,7 @@ async def process_settings_back(callback: types.CallbackQuery):
         [InlineKeyboardButton(text="🌍 Город и время", callback_data="settings_location")],
         [InlineKeyboardButton(text="⚡ Чувствительность", callback_data="settings_sensitivity")],
         [InlineKeyboardButton(text="🌿 Аллергены", callback_data="settings_allergens")],
+        [InlineKeyboardButton(text="📝 Обратная связь", callback_data="settings_feedback")],
     ])
     await callback.message.edit_text(text, reply_markup=keyboard)
     await callback.answer()
@@ -507,6 +510,124 @@ async def handle_text_message(message: types.Message, state: FSMContext):
         await message.answer(f"Ой, я не могу найти место '{message.text}'. 😔\nПопробуй написать его по-другому или проверь, нет ли опечаток.")
 
 
+# --- Feedback handlers ---
+
+# Временное хранилище feeling перед сохранением
+_feedback_temp = {}
+
+
+@dp.callback_query(F.data.startswith("feeling:"))
+async def handle_feeling_callback(callback: types.CallbackQuery):
+    """Пользователь выбрал общую оценку самочувствия."""
+    feeling = int(callback.data.split(':')[1])
+    _feedback_temp[callback.from_user.id] = {'feeling': feeling}
+
+    if feeling >= 3:  # Так себе или хуже — спрашиваем симптомы
+        await callback.message.edit_text(
+            f"Понял, оценка {feeling}/5. Что именно беспокоило?",
+            reply_markup=get_symptoms_keyboard(),
+        )
+    else:
+        await _save_feedback_with_score(callback.from_user.id, feeling, {})
+        await callback.message.edit_text("Рад что всё хорошо! ✨")
+
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("symptom:"))
+async def handle_symptom_callback(callback: types.CallbackQuery):
+    """Пользователь выбрал симптом."""
+    symptom = callback.data.split(':')[1]
+    user_id = callback.from_user.id
+
+    if user_id not in _feedback_temp:
+        _feedback_temp[user_id] = {'symptoms': [], 'feeling': 3}
+
+    if 'symptoms' not in _feedback_temp[user_id]:
+        _feedback_temp[user_id]['symptoms'] = []
+
+    _feedback_temp[user_id]['symptoms'].append(symptom)
+
+    symptom_labels = {
+        'headache': '🤕', 'joint_pain': '🦴', 'fatigue': '😴',
+        'respiratory': '🫁', 'allergy': '🤧',
+    }
+    await callback.answer(f"{symptom_labels.get(symptom, '')} отмечено")
+
+
+@dp.callback_query(F.data == "symptoms_done")
+async def handle_symptoms_done(callback: types.CallbackQuery):
+    """Пользователь закончил выбирать симптомы."""
+    user_id = callback.from_user.id
+    temp = _feedback_temp.get(user_id, {})
+    feeling = temp.get('feeling', 3)
+    symptoms = temp.get('symptoms', [])
+
+    symptoms_dict = {
+        'headache': 'headache' in symptoms,
+        'joint_pain': 'joint_pain' in symptoms,
+        'fatigue': 'fatigue' in symptoms,
+        'respiratory': 'respiratory' in symptoms,
+        'allergy_symptoms': 'allergy' in symptoms,
+    }
+
+    await _save_feedback_with_score(user_id, feeling, symptoms_dict)
+    await callback.message.edit_text("Спасибо за обратную связь! 🙏 Это поможет улучшить прогнозы.")
+    await callback.answer()
+
+
+async def _save_feedback_with_score(user_id: int, feeling: int, symptoms: dict):
+    """Сохраняет feedback со снимком последнего прогноза."""
+    from datetime import date
+
+    feedback_data = {
+        'forecast_date': date.today(),
+        'overall_feeling': feeling,
+        **symptoms,
+    }
+
+    # Получаем снимок прогноза из кэша
+    snapshot = _forecast_cache.get(f"metrics:{user_id}", {})
+    feedback_data.update(snapshot)
+
+    await db.save_feedback(user_id, feedback_data)
+    logging.info(f"Feedback сохранён: user={user_id}, feeling={feeling}")
+
+
+@dp.callback_query(F.data == "settings_feedback")
+async def process_feedback_settings(callback: types.CallbackQuery):
+    """Меню настройки обратной связи."""
+    user = await db.get_user_by_id(callback.from_user.id)
+    is_on = user.get('feedback_enabled', False)
+    status = "✅ Включено" if is_on else "❌ Выключено"
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="Включить" if not is_on else "Выключить",
+            callback_data=f"toggle:feedback:{'on' if not is_on else 'off'}"
+        )],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="settings_back")],
+    ])
+
+    await callback.message.edit_text(
+        f"📝 <b>Обратная связь</b>\n\n"
+        f"Статус: {status}\n\n"
+        f"Каждый вечер в 20:00 бот будет спрашивать о вашем самочувствии. "
+        f"Это поможет персонализировать прогнозы.",
+        reply_markup=keyboard,
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("toggle:feedback:"))
+async def handle_feedback_toggle(callback: types.CallbackQuery):
+    """Переключение обратной связи."""
+    action = callback.data.split(':')[2]
+    enabled = action == 'on'
+    await db.set_feedback_enabled(callback.from_user.id, enabled)
+    await process_feedback_settings(callback)
+
+
 # --- Запуск и остановка ---
 
 async def on_shutdown(dispatcher: Dispatcher):
@@ -518,11 +639,26 @@ async def on_shutdown(dispatcher: Dispatcher):
         sentry_sdk.flush(timeout=2.0)
     logging.info("Бот остановлен.")
 
+async def evening_feedback_check():
+    """Проверяет кто в 20:00 по местному и отправляет опрос."""
+    users = await db.get_all_active_users()
+    for user in users:
+        if not user.get('feedback_enabled', False):
+            continue
+        try:
+            user_tz = pytz.timezone(str(user['timezone']))
+            user_local_time = datetime.now(user_tz)
+            if user_local_time.hour == 20:
+                await ask_evening_feedback(bot, user['user_id'], user['chat_id'])
+        except Exception as e:
+            logging.error(f"Ошибка evening feedback для {user['user_id']}: {e}")
+
 async def main():
     await db.init_pool()
     dp.shutdown.register(on_shutdown)
 
     scheduler.add_job(scheduled_check_and_send, 'cron', hour='*', minute=0)
+    scheduler.add_job(evening_feedback_check, 'cron', hour='*', minute=0)
     scheduler.start()
 
     await bot.delete_webhook(drop_pending_updates=True)
