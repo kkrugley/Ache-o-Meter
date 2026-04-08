@@ -67,6 +67,7 @@ async def get_forecast_data(lat: float, lon: float):
 async def get_open_meteo_data(lat: float, lon: float):
     """
     Получает прогноз погоды (температура, давление, влажность, видимость, CAPE и др.) с Open-Meteo.
+    past_days=1 нужен для корректного сравнения температуры (сегодня vs вчера).
     """
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
@@ -74,11 +75,13 @@ async def get_open_meteo_data(lat: float, lon: float):
         'longitude': lon,
         'hourly': 'temperature_2m,apparent_temperature,surface_pressure,relative_humidity_2m,dew_point_2m,visibility,cloudcover,cape,freezing_level_height',
         'daily': 'temperature_2m_max,temperature_2m_min',
+        'past_days': 1,
         'forecast_days': 3,
-        'timezone': 'auto'
+        'timezone': 'auto',
     }
+    timeout = aiohttp.ClientTimeout(total=15)
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url, params=params) as response:
                 response.raise_for_status()
                 logging.info("Данные с Open-Meteo успешно получены.")
@@ -87,6 +90,8 @@ async def get_open_meteo_data(lat: float, lon: float):
         logging.error(f"Ошибка при запросе к Open-Meteo: {e}")
         if HAS_SENTRY:
             sentry_sdk.capture_exception(e)
+    except asyncio.TimeoutError:
+        logging.error("Таймаут при запросе к Open-Meteo")
     return {}
 
 
@@ -100,10 +105,11 @@ async def get_air_quality_data(lat: float, lon: float):
         'longitude': lon,
         'hourly': 'pm2_5,pm10,nitrogen_dioxide,ozone,uv_index,dust,alder_pollen,birch_pollen,grass_pollen,mugwort_pollen,olive_pollen,ragweed_pollen',
         'forecast_days': 3,
-        'timezone': 'auto'
+        'timezone': 'auto',
     }
+    timeout = aiohttp.ClientTimeout(total=15)
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url, params=params) as response:
                 response.raise_for_status()
                 logging.info("Данные о качестве воздуха с Open-Meteo успешно получены.")
@@ -112,6 +118,8 @@ async def get_air_quality_data(lat: float, lon: float):
         logging.error(f"Ошибка при запросе к Open-Meteo Air Quality: {e}")
         if HAS_SENTRY:
             sentry_sdk.capture_exception(e)
+    except asyncio.TimeoutError:
+        logging.error("Таймаут при запросе к Open-Meteo Air Quality")
     return {}
 
 
@@ -120,8 +128,9 @@ async def get_noaa_geo_data():
     Получает прогноз геомагнитной активности (Kp-индекс) с NOAA SWPC.
     """
     url = "https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json"
+    timeout = aiohttp.ClientTimeout(total=15)
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url) as response:
                 response.raise_for_status()
                 data = await response.json()
@@ -129,9 +138,10 @@ async def get_noaa_geo_data():
                     {
                         'time_tag': item['time_tag'],
                         'kp_value': float(item['kp']),
-                        'observation_status': item['observed']
+                        'observation_status': item.get('observed', ''),
                     }
-                    for item in data if isinstance(item, dict) and 'time_tag' in item
+                    for item in data
+                    if isinstance(item, dict) and 'time_tag' in item and 'kp' in item
                 ]
                 logging.info("Данные о геомагнитной обстановке с NOAA успешно получены.")
                 return {'geo_forecast': processed_data}
@@ -139,6 +149,8 @@ async def get_noaa_geo_data():
         logging.error(f"Ошибка при запросе к NOAA: {e}")
         if HAS_SENTRY:
             sentry_sdk.capture_exception(e)
+    except asyncio.TimeoutError:
+        logging.error("Таймаут при запросе к NOAA geo")
     return {}
 
 
@@ -147,19 +159,24 @@ async def get_solar_activity_data():
     Получает данные о солнечном ветре (скорость) как показатель солнечной активности.
     """
     url = "https://services.swpc.noaa.gov/products/solar-wind/plasma-5-minute.json"
-
+    timeout = aiohttp.ClientTimeout(total=15)
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url) as response:
                 response.raise_for_status()
                 data = await response.json()
-                processed_data = [float(item[1]) for item in data[1:] if len(item) > 1 and item[1] != '-9999.9']
+                processed_data = [
+                    float(item[1]) for item in data[1:]
+                    if len(item) > 1 and item[1] not in ('-9999.9', None)
+                ]
                 logging.info("Данные о солнечной активности успешно получены.")
                 return {'solar_wind_speed': processed_data}
     except aiohttp.ClientError as e:
         logging.error(f"Ошибка при запросе к NOAA (solar wind): {e}")
         if HAS_SENTRY:
             sentry_sdk.capture_exception(e)
+    except asyncio.TimeoutError:
+        logging.error("Таймаут при запросе к NOAA solar wind")
     return {}
 
 
@@ -210,25 +227,32 @@ def format_compact_message(analysis: dict) -> str:
     message = f"{emoji} <b>Прогноз на сегодня</b>\n\n"
     message += f"Общий риск: {bar} {total_score}/50 — {risk_level.upper()}\n\n"
 
-    # Топ-3 фактора
+    # Топ-3 значимых фактора (только с ненулевым весом)
     factors = analysis.get('factors', [])
-    top_factors = sorted(factors, key=lambda x: x['weighted'], reverse=True)[:3]
+    top_factors = sorted(
+        [f for f in factors if f.get('weighted', 0) > 0],
+        key=lambda x: x['weighted'],
+        reverse=True
+    )[:3]
+
     if top_factors:
         message += "<b>⚠️ Главные факторы:</b>\n"
         for f in top_factors:
-            message += f"{f['name']}: {f['detail']}\n"
+            message += f"  {f['name']}: {f['detail']}\n"
+    else:
+        message += "✅ Все показатели в норме\n"
 
     # Combo бонусы
     combos = analysis.get('combos', [])
     if combos:
         message += "\n<b>🔗 Комбинации:</b>\n"
         for c in combos:
-            message += f"• {c['name']} (+{c['bonus']})\n"
+            message += f"  • {c['name']} (+{c['bonus']})\n"
 
     # Пиковое окно
     peak = analysis.get('peak_hours')
     if peak:
-        message += f"\n⏰ Самое неприятное время: {peak}"
+        message += f"\n⏰ Пик нагрузки: {peak}"
 
     return message
 

@@ -154,43 +154,57 @@ async def send_forecast_to_user(user_id: int, chat_id: int, detailed: bool = Fal
 
 class TTLCache:
     """Простой TTL-based кэш с автоматической очисткой."""
-    
+
     def __init__(self, max_size: int = 500, ttl_seconds: int = 86400):
         self._cache = {}
         self._max_size = max_size
         self._ttl = ttl_seconds
-    
-    def get(self, key, default=None):
+
+    def _is_valid(self, key) -> bool:
+        """Проверяет, существует ли ключ и не истёк ли TTL."""
         if key in self._cache:
-            value, timestamp = self._cache[key]
+            _, timestamp = self._cache[key]
             if time.time() - timestamp < self._ttl:
-                return value
-            else:
-                del self._cache[key]
+                return True
+            del self._cache[key]
+        return False
+
+    def get(self, key, default=None):
+        if self._is_valid(key):
+            return self._cache[key][0]
         return default
-    
+
+    def __getitem__(self, key):
+        if self._is_valid(key):
+            return self._cache[key][0]
+        raise KeyError(key)
+
+    def __contains__(self, key):
+        return self._is_valid(key)
+
     def __setitem__(self, key, value):
-        # Evict expired entries if over limit
         if len(self._cache) >= self._max_size:
             now = time.time()
             expired = [k for k, (_, ts) in self._cache.items() if now - ts >= self._ttl]
             for k in expired:
                 del self._cache[k]
-            # If still over limit, remove oldest
             if len(self._cache) >= self._max_size:
                 oldest_key = min(self._cache, key=lambda k: self._cache[k][1])
                 del self._cache[oldest_key]
         self._cache[key] = (value, time.time())
-    
+
     def pop(self, key, default=None):
-        if key in self._cache:
-            val, _ = self._cache[key]
+        if self._is_valid(key):
+            val = self._cache[key][0]
             del self._cache[key]
             return val
+        if key in self._cache:
+            del self._cache[key]
         return default
-    
+
     def __len__(self):
-        return len(self._cache)
+        now = time.time()
+        return sum(1 for _, ts in self._cache.values() if now - ts < self._ttl)
 
 
 # Простой кэш analysis-данных (user_id -> analysis)
@@ -513,9 +527,10 @@ async def process_change_time_callback(callback: types.CallbackQuery, state: FSM
 @dp.message(UserState.waiting_for_time, F.text)
 async def process_new_time(message: types.Message, state: FSMContext):
     try:
-        datetime.strptime(message.text, '%H:%M')
-        await db.update_user_notification_time(message.from_user.id, message.text)
-        await message.answer(f"Отлично! Новое время уведомлений установлено на <b>{message.text}</b>.")
+        dt = datetime.strptime(message.text.strip(), '%H:%M')
+        normalized_time = dt.strftime('%H:%M')  # Всегда с ведущим нулём: 08:00, не 8:00
+        await db.update_user_notification_time(message.from_user.id, normalized_time)
+        await message.answer(f"Отлично! Новое время уведомлений установлено на <b>{normalized_time}</b>.")
         await state.clear()
     except ValueError:
         await message.answer("Ой, формат неправильный. Пожалуйста, попробуй еще раз в формате <b>ЧЧ:ММ</b> (например, 09:00).")
@@ -711,7 +726,7 @@ async def main():
     await db.init_pool()
     dp.shutdown.register(on_shutdown)
 
-    scheduler.add_job(scheduled_check_and_send, 'cron', hour='*', minute=0)
+    scheduler.add_job(scheduled_check_and_send, 'cron', minute='*')
     scheduler.add_job(evening_feedback_check, 'cron', hour='*', minute=0)
     scheduler.start()
 

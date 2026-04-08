@@ -1,6 +1,7 @@
 """Дополнительные данные о солнечной активности."""
 import logging
 import aiohttp
+import asyncio
 
 
 def k_to_ap(kp: float) -> float:
@@ -44,17 +45,19 @@ async def get_noaa_ap_index():
 async def get_solar_flares():
     """Получает данные о солнечных вспышках GOES X-ray."""
     url = "https://services.swpc.noaa.gov/json/goes/primary/xray-flares-latest.json"
+    timeout = aiohttp.ClientTimeout(total=15)
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url) as response:
                 response.raise_for_status()
                 data = await response.json()
-                # Фильтруем M и X классы
                 significant = [
                     flare for flare in data
                     if isinstance(flare, dict) and flare.get('class', '').startswith(('M', 'X'))
                 ]
                 return {'solar_flares': significant}
+    except asyncio.TimeoutError:
+        logging.error("Таймаут при запросе к NOAA solar flares")
     except Exception as e:
         logging.error(f"Ошибка солнечные вспышки: {e}")
-        return {}
+    return {}

@@ -346,28 +346,29 @@ def calculate_risk_score(data, user_profile, climate_normals=None):
                 if detail.get('peak_time'):
                     stats['pressure_rate_peak'] = detail['peak_time']
 
-    # 3. Температура
+    # 3. Температура (сравниваем сегодня с вчера; past_days=1 даёт [вчера, сегодня, ...])
     if sensitivities.get('temperature'):
         daily = data.get('weather', {}).get('daily', {})
         temp_max_list = daily.get('temperature_2m_max', [])
         if len(temp_max_list) >= 2:
-            today_max = temp_max_list[1] if len(temp_max_list) > 1 else temp_max_list[0]
             yesterday_max = temp_max_list[0]
-            score, detail = score_temperature_change(today_max, yesterday_max)
-            weight = FACTOR_WEIGHTS['temperature_change']
-            factors.append({
-                'name': '🌡️ Температура (Δ день)',
-                'score': score, 'weight': weight,
-                'weighted': round(score * weight, 1),
-                'detail': f"сегодня {detail['today_max']}°C / вчера {detail['yesterday_max']}°C (Δ{detail['diff_c']}°C)",
-            })
-            individual_scores['temperature_change'] = score
-            stats['temp_diff'] = detail['diff_c']
+            today_max = temp_max_list[1]
+            if yesterday_max is not None and today_max is not None:
+                score, detail = score_temperature_change(today_max, yesterday_max)
+                weight = FACTOR_WEIGHTS['temperature_change']
+                factors.append({
+                    'name': '🌡️ Температура (Δ день)',
+                    'score': score, 'weight': weight,
+                    'weighted': round(score * weight, 1),
+                    'detail': f"сегодня {detail['today_max']}°C / вчера {detail['yesterday_max']}°C (Δ{detail['diff_c']}°C)",
+                })
+                individual_scores['temperature_change'] = score
+                stats['temp_diff'] = detail['diff_c']
 
     # 4. Геомагнитная (Kp)
     if sensitivities.get('geomagnetic'):
         max_kp = 0
-        future_limit = now.replace(tzinfo=ZoneInfo('UTC')) + timedelta(hours=24)
+        future_limit = now.astimezone(ZoneInfo('UTC')) + timedelta(hours=24)
         for fc in geo_forecast:
             # NOAA time_tag может быть: "2026-04-01T00:00:00", "2026-04-01T00:00:00Z",
             # или содержать кавычки: "'2026-04-01T00:00:00'"
