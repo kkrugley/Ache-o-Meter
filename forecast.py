@@ -1,6 +1,7 @@
 import logging
 import aiohttp
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import asyncio
 import html
 import pytz
@@ -149,6 +150,43 @@ async def get_solar_activity_data():
     return {}
 
 
+def parse_timezone_aware(time_str: str, timezone_str: str) -> datetime:
+    """
+    Парсит строку времени из Open-Meteo (naive) в aware datetime.
+    Open-Meteo возвращает время в указанной timezone, но без суффикса.
+    """
+    dt = datetime.fromisoformat(time_str)
+    if dt.tzinfo is not None:
+        return dt  # уже aware
+    tz = ZoneInfo(timezone_str)
+    return dt.replace(tzinfo=tz)
+
+
+def max_rate_of_change(values: list[float], timestamps: list[datetime], window_hours: int = 3) -> tuple[float, datetime | None]:
+    """
+    Находит максимальную скорость изменения в скользящем окне.
+    Возвращает (max_rate, peak_time).
+    """
+    if not values or not timestamps or len(values) != len(timestamps):
+        return 0.0, None
+
+    max_rate = 0.0
+    peak_time = None
+
+    for i in range(len(values)):
+        for j in range(i + 1, len(values)):
+            dt_hours = (timestamps[j] - timestamps[i]).total_seconds() / 3600
+            if dt_hours > window_hours:
+                break
+            if dt_hours > 0:
+                rate = abs(values[j] - values[i]) / dt_hours
+                if rate > max_rate:
+                    max_rate = rate
+                    peak_time = timestamps[j]
+
+    return max_rate, peak_time
+
+
 # --- Анализ и формирование сообщения ---
 
 def analyze_data_and_form_message(data: dict, user_profile: dict = None):
@@ -191,8 +229,13 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
             if db_key in user_profile:
                 allergens[key] = bool(user_profile[db_key])
 
+    # Получаем timezone пользователя
+    user_tz = "UTC"  # default
+    if user_profile and user_profile.get('timezone'):
+        user_tz = user_profile['timezone']
+
     risks = []
-    now = datetime.now().astimezone()
+    now = datetime.now(ZoneInfo(user_tz))
     has_allergen_sensitivity = any(allergens.values())
 
     # Статистика для детального отчёта
@@ -214,7 +257,7 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                 future_24h = []
                 for t, p in zip(hourly_times, hourly_pressure):
                     try:
-                        dt = datetime.fromisoformat(t)
+                        dt = parse_timezone_aware(t, user_tz)
                         if now - timedelta(hours=24) <= dt < now:
                             past_24h.append((dt, p))
                         elif now <= dt < now + timedelta(hours=24):
@@ -239,17 +282,22 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                     else:
                         stats['pressure_status'] = '✅ норма'
 
-                    # Скорость изменения давления (мм рт. ст./час)
+                    # Скорость изменения давления (мм рт. ст./час) — скользящее окно 3 часа
                     if len(past_24h) >= 2:
-                        sorted_past = sorted(past_24h, key=lambda x: x[0])
-                        time_span_hours = (sorted_past[-1][0] - sorted_past[0][0]).total_seconds() / 3600
-                        if time_span_hours > 0:
-                            pressure_rate = abs(sorted_past[-1][1] - sorted_past[0][1]) * hpa_to_mmhg / time_span_hours
-                            stats['pressure_rate'] = round(pressure_rate, 2)
-                            if pressure_rate > 1.0:
-                                risks.append(("Средний", f"быстрое изменение давления ({round(pressure_rate, 1)} мм рт. ст./час)"))
-                            else:
-                                stats['pressure_rate_status'] = '✅ норма'
+                        all_pressure_points = sorted(past_24h + future_24h, key=lambda x: x[0])
+                        pressure_values_mmhg = [p * hpa_to_mmhg for _, p in all_pressure_points]
+                        pressure_times = [t for t, _ in all_pressure_points]
+
+                        max_pressure_rate, pressure_peak = max_rate_of_change(
+                            pressure_values_mmhg, pressure_times, window_hours=3
+                        )
+                        stats['pressure_rate'] = round(max_pressure_rate, 2)
+                        if pressure_peak:
+                            stats['pressure_peak_time'] = pressure_peak.strftime('%H:%M')
+                        if max_pressure_rate > 1.0:
+                            risks.append(("Средний", f"быстрое изменение давления ({round(max_pressure_rate, 1)} мм рт. ст./час)"))
+                        else:
+                            stats['pressure_rate_status'] = '✅ норма'
 
                     # Пиковый час риска по давлению
                     if future_24h:
@@ -292,7 +340,7 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                     recent = []
                     for t, temp in zip(hourly_times, hourly_temp):
                         try:
-                            dt = datetime.fromisoformat(t)
+                            dt = parse_timezone_aware(t, user_tz)
                             if now - timedelta(hours=6) <= dt <= now:
                                 recent.append((dt, temp))
                         except (ValueError, TypeError):
@@ -319,7 +367,7 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                 past_24h_humidity = []
                 for t, h in zip(hourly_times, hourly_humidity):
                     try:
-                        dt = datetime.fromisoformat(t)
+                        dt = parse_timezone_aware(t, user_tz)
                         if now - timedelta(hours=24) <= dt < now:
                             past_24h_humidity.append(h)
                     except (ValueError, TypeError):
@@ -340,7 +388,7 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
     if sensitivities['geomagnetic']:
         try:
             geo_forecast = data.get('geo', {}).get('geo_forecast', [])
-            future_limit = datetime.utcnow().replace(tzinfo=pytz.UTC) + timedelta(hours=24)
+            future_limit = datetime.now(pytz.UTC) + timedelta(hours=24)
             max_kp = 0
             for forecast in geo_forecast:
                 forecast_time = datetime.fromisoformat(forecast['time_tag'].replace('Z', '+00:00'))
@@ -387,7 +435,7 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                 next_24h_o3 = []
                 for i, t in enumerate(hourly_times):
                     try:
-                        dt = datetime.fromisoformat(t)
+                        dt = parse_timezone_aware(t, user_tz)
                         if now <= dt < now + timedelta(hours=24):
                             if i < len(hourly_pm25): next_24h_pm25.append(hourly_pm25[i])
                             if i < len(hourly_pm10): next_24h_pm10.append(hourly_pm10[i])
@@ -441,7 +489,7 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                 next_24h_uv = []
                 for i, t in enumerate(hourly_times):
                     try:
-                        dt = datetime.fromisoformat(t)
+                        dt = parse_timezone_aware(t, user_tz)
                         if now <= dt < now + timedelta(hours=24):
                             if i < len(hourly_uv):
                                 next_24h_uv.append(hourly_uv[i])
@@ -495,7 +543,7 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                 next_24h_pollen = []
                 for i, t in enumerate(hourly_times):
                     try:
-                        dt = datetime.fromisoformat(t)
+                        dt = parse_timezone_aware(t, user_tz)
                         if now <= dt < now + timedelta(hours=24):
                             if i < len(hourly_pollen) and hourly_pollen[i] is not None:
                                 next_24h_pollen.append(hourly_pollen[i])
@@ -524,7 +572,7 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                 next_24h_diffs = []
                 for i, t in enumerate(hourly_times):
                     try:
-                        dt = datetime.fromisoformat(t)
+                        dt = parse_timezone_aware(t, user_tz)
                         if now <= dt < now + timedelta(hours=24):
                             if i < len(hourly_temp) and i < len(hourly_apparent):
                                 real = hourly_temp[i]
@@ -559,7 +607,7 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                 next_24h_dew = []
                 for i, t in enumerate(hourly_times):
                     try:
-                        dt = datetime.fromisoformat(t)
+                        dt = parse_timezone_aware(t, user_tz)
                         if now <= dt < now + timedelta(hours=24):
                             if i < len(hourly_dew) and hourly_dew[i] is not None:
                                 next_24h_dew.append(hourly_dew[i])
@@ -590,7 +638,7 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                 next_24h_vis = []
                 for i, t in enumerate(hourly_times):
                     try:
-                        dt = datetime.fromisoformat(t)
+                        dt = parse_timezone_aware(t, user_tz)
                         if now <= dt < now + timedelta(hours=24):
                             if i < len(hourly_vis) and hourly_vis[i] is not None:
                                 next_24h_vis.append(hourly_vis[i])
@@ -620,7 +668,7 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                 next_24h_cape = []
                 for i, t in enumerate(hourly_times):
                     try:
-                        dt = datetime.fromisoformat(t)
+                        dt = parse_timezone_aware(t, user_tz)
                         if now <= dt < now + timedelta(hours=24):
                             if i < len(hourly_cape) and hourly_cape[i] is not None:
                                 next_24h_cape.append(hourly_cape[i])
@@ -649,7 +697,7 @@ def analyze_data_and_form_message(data: dict, user_profile: dict = None):
                 next_24h_fl = []
                 for i, t in enumerate(hourly_times):
                     try:
-                        dt = datetime.fromisoformat(t)
+                        dt = parse_timezone_aware(t, user_tz)
                         if now <= dt < now + timedelta(hours=24):
                             if i < len(hourly_fl) and hourly_fl[i] is not None:
                                 next_24h_fl.append(hourly_fl[i])
