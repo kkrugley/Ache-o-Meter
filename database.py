@@ -50,6 +50,32 @@ ALLERGEN_LABELS = {
     'allergen_ragweed': '🌿 Амброзия',
 }
 
+FEEDBACK_TABLE_SQL = '''
+    CREATE TABLE IF NOT EXISTS feedback (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL REFERENCES users(user_id),
+        forecast_date DATE NOT NULL,
+        overall_feeling INTEGER NOT NULL,
+        headache BOOLEAN DEFAULT FALSE,
+        joint_pain BOOLEAN DEFAULT FALSE,
+        fatigue BOOLEAN DEFAULT FALSE,
+        respiratory BOOLEAN DEFAULT FALSE,
+        allergy_symptoms BOOLEAN DEFAULT FALSE,
+        forecast_risk_score REAL,
+        forecast_risk_level TEXT,
+        created_at TIMESTAMP DEFAULT NOW(),
+        pressure_change REAL,
+        temp_change REAL,
+        kp_max REAL,
+        pm25_avg REAL,
+        UNIQUE(user_id, forecast_date)
+    )
+'''
+
+MIGRATION_SQL = '''
+    ALTER TABLE users ADD COLUMN feedback_enabled BOOLEAN DEFAULT FALSE
+'''
+
 USERS_TABLE_SQL = '''
     CREATE TABLE IF NOT EXISTS users (
         user_id BIGINT PRIMARY KEY,
@@ -111,6 +137,9 @@ async def init_pool():
             await _add_column_if_not_exists(conn, 'users', 'allergen_mugwort', 'BOOLEAN DEFAULT FALSE')
             await _add_column_if_not_exists(conn, 'users', 'allergen_olive', 'BOOLEAN DEFAULT FALSE')
             await _add_column_if_not_exists(conn, 'users', 'allergen_ragweed', 'BOOLEAN DEFAULT FALSE')
+            # Миграция: таблица feedback и колонка feedback_enabled
+            await conn.execute(FEEDBACK_TABLE_SQL)
+            await _add_column_if_not_exists(conn, 'users', 'feedback_enabled', 'BOOLEAN DEFAULT FALSE')
         logging.info("База данных PostgreSQL успешно инициализирована.")
     except Exception as e:
         logging.error(f"Ошибка при инициализации БД: {e}")
@@ -220,3 +249,69 @@ async def get_user_by_id(user_id: int):
     except Exception as e:
         logging.error(f"Ошибка при получении пользователя {user_id} из БД: {e}")
         return None
+
+
+async def save_feedback(user_id: int, feedback_data: dict):
+    """Сохраняет обратную связь пользователя."""
+    try:
+        async with _pool.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO feedback (
+                    user_id, forecast_date, overall_feeling,
+                    headache, joint_pain, fatigue, respiratory, allergy_symptoms,
+                    forecast_risk_score, forecast_risk_level,
+                    pressure_change, temp_change, kp_max, pm25_avg
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                ON CONFLICT(user_id, forecast_date) DO UPDATE SET
+                    overall_feeling=EXCLUDED.overall_feeling,
+                    headache=EXCLUDED.headache,
+                    joint_pain=EXCLUDED.joint_pain,
+                    fatigue=EXCLUDED.fatigue,
+                    respiratory=EXCLUDED.respiratory,
+                    allergy_symptoms=EXCLUDED.allergy_symptoms,
+                    forecast_risk_score=EXCLUDED.forecast_risk_score,
+                    forecast_risk_level=EXCLUDED.forecast_risk_level
+            ''',
+                user_id,
+                feedback_data['forecast_date'],
+                feedback_data['overall_feeling'],
+                feedback_data.get('headache', False),
+                feedback_data.get('joint_pain', False),
+                feedback_data.get('fatigue', False),
+                feedback_data.get('respiratory', False),
+                feedback_data.get('allergy_symptoms', False),
+                feedback_data.get('forecast_risk_score'),
+                feedback_data.get('forecast_risk_level'),
+                feedback_data.get('pressure_change'),
+                feedback_data.get('temp_change'),
+                feedback_data.get('kp_max'),
+                feedback_data.get('pm25_avg'),
+            )
+    except Exception as e:
+        logging.error(f"Ошибка при сохранении feedback от {user_id}: {e}")
+
+
+async def get_user_feedback(user_id: int, limit: int = 100):
+    """Возвращает историю feedback пользователя."""
+    try:
+        async with _pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM feedback WHERE user_id = $1 ORDER BY forecast_date DESC LIMIT $2",
+                user_id, limit
+            )
+            return [dict(row) for row in rows]
+    except Exception as e:
+        logging.error(f"Ошибка при получении feedback для {user_id}: {e}")
+        return []
+
+
+async def set_feedback_enabled(user_id: int, enabled: bool):
+    """Включает/выключает обратную связь для пользователя."""
+    try:
+        async with _pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET feedback_enabled = $1 WHERE user_id = $2",
+                enabled, user_id
+            )
+    except Exception as e:
+        logging.error(f"Ошибка при обновлении feedback_enabled для {user_id}: {e}")
