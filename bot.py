@@ -1,12 +1,13 @@
 import asyncio
 import logging
 import os
+import time
 from urllib.parse import quote
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import json
 
 import aiohttp
-import pytz
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import Command, CommandStart
@@ -151,8 +152,49 @@ async def send_forecast_to_user(user_id: int, chat_id: int, detailed: bool = Fal
             pass
 
 
+class TTLCache:
+    """Простой TTL-based кэш с автоматической очисткой."""
+    
+    def __init__(self, max_size: int = 500, ttl_seconds: int = 86400):
+        self._cache = {}
+        self._max_size = max_size
+        self._ttl = ttl_seconds
+    
+    def get(self, key, default=None):
+        if key in self._cache:
+            value, timestamp = self._cache[key]
+            if time.time() - timestamp < self._ttl:
+                return value
+            else:
+                del self._cache[key]
+        return default
+    
+    def __setitem__(self, key, value):
+        # Evict expired entries if over limit
+        if len(self._cache) >= self._max_size:
+            now = time.time()
+            expired = [k for k, (_, ts) in self._cache.items() if now - ts >= self._ttl]
+            for k in expired:
+                del self._cache[k]
+            # If still over limit, remove oldest
+            if len(self._cache) >= self._max_size:
+                oldest_key = min(self._cache, key=lambda k: self._cache[k][1])
+                del self._cache[oldest_key]
+        self._cache[key] = (value, time.time())
+    
+    def pop(self, key, default=None):
+        if key in self._cache:
+            val, _ = self._cache[key]
+            del self._cache[key]
+            return val
+        return default
+    
+    def __len__(self):
+        return len(self._cache)
+
+
 # Простой кэш analysis-данных (user_id -> analysis)
-_forecast_cache = {}
+_forecast_cache = TTLCache(max_size=500, ttl_seconds=86400)  # 500 записей, 24ч TTL
 
 
 def _compact_hash(analysis_json: str) -> str:
@@ -172,7 +214,7 @@ async def scheduled_check_and_send():
 
     for user in users:
         try:
-            user_tz = pytz.timezone(str(user['timezone']))
+            user_tz = ZoneInfo(str(user['timezone']))
             user_local_time = datetime.now(user_tz)
             if user_local_time.strftime('%H:%M') == user['notification_time']:
                 logging.info(f"Время совпало для пользователя {user['user_id']}. Отправляю прогноз.")
@@ -524,7 +566,7 @@ async def handle_text_message(message: types.Message, state: FSMContext):
 # --- Feedback handlers ---
 
 # Временное хранилище feeling перед сохранением
-_feedback_temp = {}
+_feedback_temp = TTLCache(max_size=200, ttl_seconds=3600)  # 200 записей, 1ч TTL
 
 
 @dp.callback_query(F.data.startswith("feeling:"))
@@ -603,6 +645,7 @@ async def _save_feedback_with_score(user_id: int, feeling: int, symptoms: dict):
 
     await db.save_feedback(user_id, feedback_data)
     logging.info(f"Feedback сохранён: user={user_id}, feeling={feeling}")
+    _feedback_temp.pop(user_id, None)  # Очищаем временное хранилище
 
 
 @dp.callback_query(F.data == "settings_feedback")
@@ -657,7 +700,7 @@ async def evening_feedback_check():
         if not user.get('feedback_enabled', False):
             continue
         try:
-            user_tz = pytz.timezone(str(user['timezone']))
+            user_tz = ZoneInfo(str(user['timezone']))
             user_local_time = datetime.now(user_tz)
             if user_local_time.hour == 20:
                 await ask_evening_feedback(bot, user['user_id'], user['chat_id'])
