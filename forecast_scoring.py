@@ -369,7 +369,14 @@ def calculate_risk_score(data, user_profile, climate_normals=None):
         max_kp = 0
         future_limit = now.replace(tzinfo=ZoneInfo('UTC')) + timedelta(hours=24)
         for fc in geo_forecast:
-            ft = datetime.fromisoformat(fc['time_tag'].replace('Z', '+00:00'))
+            # NOAA time_tag может быть: "2026-04-01T00:00:00", "2026-04-01T00:00:00Z",
+            # или содержать кавычки: "'2026-04-01T00:00:00'"
+            time_str = str(fc['time_tag']).strip("'\" ")
+            if time_str.endswith('Z'):
+                time_str = time_str[:-1] + '+00:00'
+            ft = datetime.fromisoformat(time_str)
+            if ft.tzinfo is None:
+                ft = ft.replace(tzinfo=ZoneInfo('UTC'))
             if ft < future_limit and fc['kp_value'] > max_kp:
                 max_kp = fc['kp_value']
         if max_kp > 0:
