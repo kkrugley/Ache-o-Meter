@@ -72,7 +72,7 @@ async def get_open_meteo_data(lat: float, lon: float):
     params = {
         'latitude': lat,
         'longitude': lon,
-        'hourly': 'temperature_2m,apparent_temperature,surface_pressure,relative_humidity_2m,dew_point_2m,visibility,cloud_cover_total,cape,freezing_level_height',
+        'hourly': 'temperature_2m,apparent_temperature,surface_pressure,relative_humidity_2m,dew_point_2m,visibility,cloudcover,cape,freezing_level_height',
         'daily': 'temperature_2m_max,temperature_2m_min',
         'forecast_days': 3,
         'timezone': 'auto'
