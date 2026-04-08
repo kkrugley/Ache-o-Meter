@@ -4,6 +4,8 @@
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from utils import parse_timezone_aware, max_rate_of_change
+
 
 # Веса факторов (будут калиброваться через обратную связь)
 FACTOR_WEIGHTS = {
@@ -123,8 +125,6 @@ def score_pressure_change(pressure_values, times, current_idx, is_falling, clima
 
 def score_pressure_rate(pressure_values, times, window_hours=3):
     """Scoring для скорости изменения давления (скользящее окно)."""
-    from forecast import max_rate_of_change
-
     HPA_TO_MMHG = 0.750062
     values_mmhg = [p * HPA_TO_MMHG for p in pressure_values]
     max_rate, peak_time = max_rate_of_change(values_mmhg, times, window_hours)
@@ -266,7 +266,6 @@ def calculate_risk_score(data, user_profile, climate_normals=None):
     air_times_str = air_hourly.get('time', [])
     geo_forecast = data.get('geo', {}).get('geo_forecast', [])
 
-    from forecast import parse_timezone_aware
     weather_times = [parse_timezone_aware(t, user_tz) for t in weather_times_str]
     air_times = [parse_timezone_aware(t, user_tz) for t in air_times_str]
 
